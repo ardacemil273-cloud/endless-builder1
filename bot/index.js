@@ -17,9 +17,9 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds]
 });
 
-// ==========================================
+// ======================================================
 // DATA
-// ==========================================
+// ======================================================
 
 const dataFolder = path.join(__dirname, "..", "data");
 const dataFile = path.join(dataFolder, "servers.json");
@@ -37,7 +37,8 @@ function loadData() {
     return JSON.parse(
       fs.readFileSync(dataFile, "utf8")
     );
-  } catch {
+  } catch (error) {
+    console.error("Data okuma hatası:", error);
     return {};
   }
 }
@@ -49,72 +50,38 @@ function saveData(data) {
   );
 }
 
-
-// ==========================================
-// SETUP OTURUMLARI
-// ==========================================
+// ======================================================
+// SETUP SESSIONS
+// ======================================================
 
 const setupSessions = new Map();
 
-function getSessionKey(interaction) {
-  return `${interaction.guild.id}:${interaction.user.id}`;
+function sessionKey(interaction) {
+  return `${interaction.guildId}:${interaction.user.id}`;
 }
 
-function getSetupSession(interaction) {
+function getSession(interaction) {
   return setupSessions.get(
-    getSessionKey(interaction)
+    sessionKey(interaction)
   );
 }
 
-function setSetupSession(interaction, session) {
+function setSession(interaction, data) {
   setupSessions.set(
-    getSessionKey(interaction),
-    session
+    sessionKey(interaction),
+    data
   );
 }
 
-function deleteSetupSession(interaction) {
+function deleteSession(interaction) {
   setupSessions.delete(
-    getSessionKey(interaction)
+    sessionKey(interaction)
   );
 }
 
-
-// ==========================================
-// KOMUTLAR
-// ==========================================
-
-const setupCommand = new SlashCommandBuilder()
-  .setName("setup")
-  .setDescription(
-    "Gelişmiş Discord Server Builder'ı başlatır."
-  )
-  .setDefaultMemberPermissions(
-    PermissionsBitField.Flags.ManageGuild.toString()
-  );
-
-const changeSetupCommand = new SlashCommandBuilder()
-  .setName("setup-degistir")
-  .setDescription(
-    "Mevcut Builder kurulumunu değiştirir."
-  )
-  .setDefaultMemberPermissions(
-    PermissionsBitField.Flags.ManageGuild.toString()
-  );
-
-const setupStatusCommand = new SlashCommandBuilder()
-  .setName("setup-durum")
-  .setDescription(
-    "Sunucunun mevcut Builder durumunu gösterir."
-  )
-  .setDefaultMemberPermissions(
-    PermissionsBitField.Flags.ManageGuild.toString()
-  );
-
-
-// ==========================================
-// ŞABLONLAR
-// ==========================================
+// ======================================================
+// TEMPLATES
+// ======================================================
 
 const templates = {
 
@@ -123,8 +90,8 @@ const templates = {
     emoji: "🎮",
 
     categories: [
+
       {
-        key: "info",
         name: "BİLGİ",
         emoji: "📌",
         channels: [
@@ -136,20 +103,31 @@ const templates = {
       },
 
       {
-        key: "community",
+        name: "KAYIT",
+        emoji: "📝",
+        channels: [
+          ["kayıt", "text"],
+          ["kayıt-bilgi", "text"],
+          ["kayıt-log", "text"],
+          ["rol-seçim", "text"]
+        ]
+      },
+
+      {
         name: "TOPLULUK",
         emoji: "💬",
         channels: [
           ["sohbet", "text"],
           ["bot-komutları", "text"],
           ["medya", "text"],
+          ["fotoğraf", "text"],
           ["mizah", "text"],
-          ["öneriler", "text"]
+          ["öneriler", "text"],
+          ["anketler", "text"]
         ]
       },
 
       {
-        key: "game",
         name: "OYUN",
         emoji: "🎮",
         channels: [
@@ -165,19 +143,6 @@ const templates = {
       },
 
       {
-        key: "registration",
-        name: "KAYIT",
-        emoji: "📝",
-        channels: [
-          ["kayıt", "text"],
-          ["kayıt-bilgi", "text"],
-          ["kayıt-log", "text"],
-          ["rol-seçim", "text"]
-        ]
-      },
-
-      {
-        key: "support",
         name: "DESTEK",
         emoji: "🎫",
         channels: [
@@ -189,19 +154,18 @@ const templates = {
       },
 
       {
-        key: "voice",
-        name: "SES ODALARI",
+        name: "SES",
         emoji: "🔊",
         channels: [
           ["Genel", "voice"],
-          ["Oyun 1", "voice"],
-          ["Oyun 2", "voice"],
+          ["Sohbet 1", "voice"],
+          ["Sohbet 2", "voice"],
+          ["Müzik", "voice"],
           ["AFK", "voice"]
         ]
       },
 
       {
-        key: "management",
         name: "YÖNETİM",
         emoji: "👑",
         channels: [
@@ -212,6 +176,7 @@ const templates = {
           ["istatistik", "text"]
         ]
       }
+
     ],
 
     roles: [
@@ -227,14 +192,15 @@ const templates = {
     ]
   },
 
+  // ====================================================
 
   community: {
     label: "Community",
     emoji: "👥",
 
     categories: [
+
       {
-        key: "info",
         name: "BİLGİ",
         emoji: "📌",
         channels: [
@@ -247,7 +213,6 @@ const templates = {
       },
 
       {
-        key: "registration",
         name: "KAYIT",
         emoji: "📝",
         channels: [
@@ -259,7 +224,6 @@ const templates = {
       },
 
       {
-        key: "community",
         name: "TOPLULUK",
         emoji: "💬",
         channels: [
@@ -274,7 +238,6 @@ const templates = {
       },
 
       {
-        key: "game",
         name: "OYUN",
         emoji: "🎮",
         channels: [
@@ -289,7 +252,6 @@ const templates = {
       },
 
       {
-        key: "support",
         name: "DESTEK",
         emoji: "🎫",
         channels: [
@@ -301,7 +263,6 @@ const templates = {
       },
 
       {
-        key: "voice",
         name: "SES",
         emoji: "🔊",
         channels: [
@@ -314,7 +275,6 @@ const templates = {
       },
 
       {
-        key: "management",
         name: "YÖNETİM",
         emoji: "👑",
         channels: [
@@ -325,6 +285,7 @@ const templates = {
           ["istatistik", "text"]
         ]
       }
+
     ],
 
     roles: [
@@ -338,14 +299,15 @@ const templates = {
     ]
   },
 
+  // ====================================================
 
   streamer: {
     label: "Streamer",
     emoji: "🎥",
 
     categories: [
+
       {
-        key: "info",
         name: "BİLGİ",
         emoji: "📌",
         channels: [
@@ -356,7 +318,6 @@ const templates = {
       },
 
       {
-        key: "streamer",
         name: "STREAMER",
         emoji: "🎥",
         channels: [
@@ -371,7 +332,6 @@ const templates = {
       },
 
       {
-        key: "community",
         name: "TOPLULUK",
         emoji: "💬",
         channels: [
@@ -384,7 +344,6 @@ const templates = {
       },
 
       {
-        key: "support",
         name: "DESTEK",
         emoji: "🎫",
         channels: [
@@ -395,7 +354,6 @@ const templates = {
       },
 
       {
-        key: "voice",
         name: "SES",
         emoji: "🔊",
         channels: [
@@ -407,7 +365,6 @@ const templates = {
       },
 
       {
-        key: "management",
         name: "YÖNETİM",
         emoji: "👑",
         channels: [
@@ -417,6 +374,7 @@ const templates = {
           ["bot-log", "text"]
         ]
       }
+
     ],
 
     roles: [
@@ -431,14 +389,15 @@ const templates = {
     ]
   },
 
+  // ====================================================
 
   public: {
     label: "Public",
     emoji: "🌐",
 
     categories: [
+
       {
-        key: "info",
         name: "BİLGİ",
         emoji: "📌",
         channels: [
@@ -451,7 +410,6 @@ const templates = {
       },
 
       {
-        key: "registration",
         name: "KAYIT",
         emoji: "📝",
         channels: [
@@ -463,7 +421,6 @@ const templates = {
       },
 
       {
-        key: "community",
         name: "TOPLULUK",
         emoji: "💬",
         channels: [
@@ -477,7 +434,6 @@ const templates = {
       },
 
       {
-        key: "game",
         name: "OYUN",
         emoji: "🎮",
         channels: [
@@ -493,7 +449,6 @@ const templates = {
       },
 
       {
-        key: "support",
         name: "DESTEK",
         emoji: "🎫",
         channels: [
@@ -505,7 +460,6 @@ const templates = {
       },
 
       {
-        key: "voice",
         name: "SES",
         emoji: "🔊",
         channels: [
@@ -518,7 +472,6 @@ const templates = {
       },
 
       {
-        key: "management",
         name: "YÖNETİM",
         emoji: "👑",
         channels: [
@@ -529,6 +482,7 @@ const templates = {
           ["istatistik", "text"]
         ]
       }
+
     ],
 
     roles: [
@@ -542,14 +496,15 @@ const templates = {
     ]
   },
 
+  // ====================================================
 
   shop: {
     label: "Shop",
     emoji: "🛒",
 
     categories: [
+
       {
-        key: "info",
         name: "BİLGİ",
         emoji: "📌",
         channels: [
@@ -560,7 +515,6 @@ const templates = {
       },
 
       {
-        key: "store",
         name: "MAĞAZA",
         emoji: "🛒",
         channels: [
@@ -573,7 +527,6 @@ const templates = {
       },
 
       {
-        key: "community",
         name: "TOPLULUK",
         emoji: "💬",
         channels: [
@@ -584,7 +537,6 @@ const templates = {
       },
 
       {
-        key: "support",
         name: "DESTEK",
         emoji: "🎫",
         channels: [
@@ -596,7 +548,6 @@ const templates = {
       },
 
       {
-        key: "voice",
         name: "SES",
         emoji: "🔊",
         channels: [
@@ -607,7 +558,6 @@ const templates = {
       },
 
       {
-        key: "management",
         name: "YÖNETİM",
         emoji: "👑",
         channels: [
@@ -617,6 +567,7 @@ const templates = {
           ["bot-log", "text"]
         ]
       }
+
     ],
 
     roles: [
@@ -630,14 +581,15 @@ const templates = {
     ]
   },
 
+  // ====================================================
 
   education: {
     label: "Education",
     emoji: "🎓",
 
     categories: [
+
       {
-        key: "info",
         name: "BİLGİ",
         emoji: "📌",
         channels: [
@@ -649,7 +601,6 @@ const templates = {
       },
 
       {
-        key: "lessons",
         name: "DERSLER",
         emoji: "📚",
         channels: [
@@ -663,7 +614,6 @@ const templates = {
       },
 
       {
-        key: "community",
         name: "TOPLULUK",
         emoji: "💬",
         channels: [
@@ -675,7 +625,6 @@ const templates = {
       },
 
       {
-        key: "support",
         name: "DESTEK",
         emoji: "🎫",
         channels: [
@@ -686,7 +635,6 @@ const templates = {
       },
 
       {
-        key: "voice",
         name: "SES SINIFLARI",
         emoji: "🔊",
         channels: [
@@ -698,7 +646,6 @@ const templates = {
       },
 
       {
-        key: "management",
         name: "YÖNETİM",
         emoji: "👑",
         channels: [
@@ -708,6 +655,7 @@ const templates = {
           ["bot-log", "text"]
         ]
       }
+
     ],
 
     roles: [
@@ -721,14 +669,15 @@ const templates = {
     ]
   },
 
+  // ====================================================
 
   clan: {
     label: "Clan / Team",
     emoji: "🏆",
 
     categories: [
+
       {
-        key: "info",
         name: "BİLGİ",
         emoji: "📌",
         channels: [
@@ -739,7 +688,6 @@ const templates = {
       },
 
       {
-        key: "team",
         name: "TAKIM",
         emoji: "🏆",
         channels: [
@@ -753,7 +701,6 @@ const templates = {
       },
 
       {
-        key: "community",
         name: "TOPLULUK",
         emoji: "💬",
         channels: [
@@ -765,7 +712,6 @@ const templates = {
       },
 
       {
-        key: "recruitment",
         name: "BAŞVURU",
         emoji: "📝",
         channels: [
@@ -776,7 +722,6 @@ const templates = {
       },
 
       {
-        key: "support",
         name: "DESTEK",
         emoji: "🎫",
         channels: [
@@ -787,7 +732,6 @@ const templates = {
       },
 
       {
-        key: "voice",
         name: "SES",
         emoji: "🔊",
         channels: [
@@ -800,7 +744,6 @@ const templates = {
       },
 
       {
-        key: "management",
         name: "YÖNETİM",
         emoji: "👑",
         channels: [
@@ -810,6 +753,7 @@ const templates = {
           ["başvuru-log", "text"]
         ]
       }
+
     ],
 
     roles: [
@@ -824,51 +768,21 @@ const templates = {
   }
 };
 
-
-// ==========================================
-// STİLLER
-// ==========================================
-
-const channelStyles = {
-  emoji: {
-    label: "Emoji'li"
-  },
-
-  plain: {
-    label: "Emojisiz"
-  }
-};
-
-const categoryStyles = {
-  emoji: {
-    label: "Emoji + Büyük Harf"
-  },
-
-  brackets: {
-    label: "Köşeli"
-  },
-
-  lines: {
-    label: "Çizgili"
-  },
-
-  plain: {
-    label: "Sade"
-  }
-};
-
-
-// ==========================================
+// ======================================================
 // KANAL EMOJİLERİ
-// ==========================================
+// ======================================================
 
 const channelEmojis = {
-
   "kurallar": "📜",
   "duyurular": "📢",
   "bilgilendirme": "📋",
   "hoşgeldin": "👋",
   "sunucu-istatistik": "📊",
+
+  "kayıt": "📝",
+  "kayıt-bilgi": "📋",
+  "kayıt-log": "📑",
+  "rol-seçim": "🎭",
 
   "sohbet": "💬",
   "bot-komutları": "🤖",
@@ -883,11 +797,6 @@ const channelEmojis = {
   "etkinlikler": "🏆",
   "turnuvalar": "🏆",
   "çekilişler": "🎁",
-
-  "kayıt": "📝",
-  "kayıt-bilgi": "📋",
-  "kayıt-log": "📑",
-  "rol-seçim": "🎭",
 
   "ticket": "🎫",
   "destek": "📩",
@@ -906,7 +815,6 @@ const channelEmojis = {
   "içerik-paylaşım": "🎬",
   "yayın-programı": "📅",
   "yayıncılar": "⭐",
-
   "klipler": "🎞️",
 
   "mağaza": "🛒",
@@ -925,8 +833,6 @@ const channelEmojis = {
   "oyuncu-başvuru": "📝",
   "yetkili-başvuru": "📝",
   "başvuru-bilgi": "📋",
-  "başvuru-log": "📑",
-  "maç-log": "📑",
 
   "matematik": "➗",
   "türkçe": "📖",
@@ -940,10 +846,9 @@ const channelEmojis = {
   "öğretmen-destek": "👨‍🏫"
 };
 
-
-// ==========================================
-// İSİM FORMATLAMA
-// ==========================================
+// ======================================================
+// FORMAT
+// ======================================================
 
 function formatChannelName(name, style) {
 
@@ -956,7 +861,6 @@ function formatChannelName(name, style) {
 
   return `${emoji}・${name}`;
 }
-
 
 function formatCategoryName(category, style) {
 
@@ -975,10 +879,9 @@ function formatCategoryName(category, style) {
   return category.name;
 }
 
-
-// ==========================================
+// ======================================================
 // MENÜLER
-// ==========================================
+// ======================================================
 
 function createSetupMenu() {
 
@@ -989,62 +892,48 @@ function createSetupMenu() {
     .addOptions(
       {
         label: "Gaming",
-        description:
-          "Oyun, takım, turnuva ve oyuncu sistemi.",
+        description: "Oyun ve oyuncu sunucusu",
         value: "gaming",
         emoji: "🎮"
       },
-
       {
         label: "Community",
-        description:
-          "Geniş kapsamlı topluluk sunucusu.",
+        description: "Genel topluluk sunucusu",
         value: "community",
         emoji: "👥"
       },
-
       {
         label: "Streamer",
-        description:
-          "Yayıncı ve içerik üreticisi sunucusu.",
+        description: "Yayıncı ve içerik üreticileri",
         value: "streamer",
         emoji: "🎥"
       },
-
       {
         label: "Public",
-        description:
-          "Genel amaçlı büyük public sunucu.",
+        description: "Genel public sunucu",
         value: "public",
         emoji: "🌐"
       },
-
       {
         label: "Shop",
-        description:
-          "Mağaza ve müşteri topluluğu.",
+        description: "Mağaza ve müşteri sunucusu",
         value: "shop",
         emoji: "🛒"
       },
-
       {
         label: "Education",
-        description:
-          "Ders ve eğitim topluluğu.",
+        description: "Eğitim ve ders sunucusu",
         value: "education",
         emoji: "🎓"
       },
-
       {
         label: "Clan / Team",
-        description:
-          "Takım, clan ve e-spor sunucusu.",
+        description: "Clan ve takım sunucusu",
         value: "clan",
         emoji: "🏆"
       }
     );
 }
-
 
 function createChannelStyleMenu() {
 
@@ -1055,22 +944,18 @@ function createChannelStyleMenu() {
     .addOptions(
       {
         label: "Emoji'li",
-        description:
-          "💬・sohbet gibi kanal isimleri.",
+        description: "💬・sohbet",
         value: "emoji",
         emoji: "✨"
       },
-
       {
         label: "Emojisiz",
-        description:
-          "sohbet gibi sade kanal isimleri.",
+        description: "sohbet",
         value: "plain",
         emoji: "⚪"
       }
     );
 }
-
 
 function createCategoryStyleMenu() {
 
@@ -1081,56 +966,44 @@ function createCategoryStyleMenu() {
     .addOptions(
       {
         label: "Emoji + Büyük Harf",
-        description:
-          "📌 BİLGİ",
+        description: "📌 BİLGİ",
         value: "emoji",
         emoji: "📁"
       },
-
       {
         label: "Köşeli",
-        description:
-          "「 BİLGİ 」",
+        description: "「 BİLGİ 」",
         value: "brackets",
-        emoji: "「"
+        emoji: "🔲"
       },
-
       {
         label: "Çizgili",
-        description:
-          "━━ BİLGİ ━━",
+        description: "━━ BİLGİ ━━",
         value: "lines",
-        emoji: "━"
+        emoji: "📏"
       },
-
       {
         label: "Sade",
-        description:
-          "BİLGİ",
+        description: "BİLGİ",
         value: "plain",
         emoji: "⚪"
       }
     );
 }
 
-
-// ==========================================
+// ======================================================
 // ÖZET
-// ==========================================
+// ======================================================
 
-function createSetupSummary(session) {
+function createSummary(session) {
 
   const template =
     templates[session.type];
 
   let channelCount = 0;
 
-  for (
-    const category
-    of template.categories
-  ) {
-    channelCount +=
-      category.channels.length;
+  for (const category of template.categories) {
+    channelCount += category.channels.length;
   }
 
   return (
@@ -1138,46 +1011,49 @@ function createSetupSummary(session) {
     "       🛠️ ENDLESS BUILDER\n" +
     "╚══════════════════════════╝\n\n" +
 
-    `🏷️ Sunucu türü: **${template.emoji} ${template.label}**\n` +
+    `🏷️ Sunucu: **${template.emoji} ${template.label}**\n` +
+    `📁 Kategori: **${template.categories.length}**\n` +
+    `💬 Kanal: **${channelCount}**\n` +
+    `🎭 Rol: **${template.roles.length}**\n\n` +
 
-    `📁 Kategori sayısı: **${template.categories.length}**\n` +
+    `✨ Kanal stili: **${
+      session.channelStyle === "emoji"
+        ? "Emoji'li"
+        : "Emojisiz"
+    }**\n` +
 
-    `💬 Kanal sayısı: **${channelCount}**\n` +
+    `📂 Kategori stili: **${
+      session.categoryStyle === "emoji"
+        ? "Emoji + Büyük Harf"
+        : session.categoryStyle === "brackets"
+          ? "Köşeli"
+          : session.categoryStyle === "lines"
+            ? "Çizgili"
+            : "Sade"
+    }**\n\n` +
 
-    `🎭 Rol sayısı: **${template.roles.length}**\n\n` +
+    "━━━━━━━━━━━━━━━━━━━━\n\n" +
 
-    `✨ Kanal stili: **${channelStyles[session.channelStyle].label}**\n` +
-
-    `📂 Kategori stili: **${categoryStyles[session.categoryStyle].label}**\n\n` +
-
-    "━━━━━━━━━━━━━━━━━━━━\n" +
-
-    "Her şey hazır.\n\n" +
-
-    "🚀 **SUNUCUYU OLUŞTUR**"
+    "🚀 Sunucuyu oluşturmak için aşağıdaki butona bas."
   );
 }
 
-
-// ==========================================
-// SUNUCU OLUŞTURMA
-// ==========================================
+// ======================================================
+// SERVER BUILD
+// ======================================================
 
 async function buildServer(
   guild,
   type,
-  settings = {}
+  settings
 ) {
 
   const template =
     templates[type];
 
   if (!template) {
-    throw new Error(
-      "Geçersiz sunucu şablonu."
-    );
+    throw new Error("Şablon bulunamadı.");
   }
-
 
   const channelStyle =
     settings.channelStyle || "emoji";
@@ -1185,51 +1061,35 @@ async function buildServer(
   const categoryStyle =
     settings.categoryStyle || "emoji";
 
-
   let categoriesCreated = 0;
   let channelsCreated = 0;
   let rolesCreated = 0;
 
-
-  // ========================================
+  // ====================================================
   // ROLLER
-  // ========================================
+  // ====================================================
 
-  for (
-    const roleName
-    of template.roles
-  ) {
+  for (const roleName of template.roles) {
 
-    const exists =
+    const existing =
       guild.roles.cache.find(
         role =>
           role.name === roleName
       );
 
-
-    if (exists) continue;
-
+    if (existing) continue;
 
     await guild.roles.create({
-
       name: roleName,
-
-      reason:
-        "Endless Builder setup"
-
+      reason: "Endless Builder"
     });
-
 
     rolesCreated++;
   }
 
-
-  await guild.roles.fetch();
-
-
-  // ========================================
+  // ====================================================
   // KATEGORİLER
-  // ========================================
+  // ====================================================
 
   for (
     const categoryData
@@ -1242,7 +1102,6 @@ async function buildServer(
         categoryStyle
       );
 
-
     let category =
       guild.channels.cache.find(
         channel =>
@@ -1252,71 +1111,60 @@ async function buildServer(
             categoryName
       );
 
-
     if (!category) {
 
       category =
         await guild.channels.create({
-
           name: categoryName,
-
-          type:
-            ChannelType.GuildCategory
-
+          type: ChannelType.GuildCategory,
+          reason: "Endless Builder"
         });
-
 
       categoriesCreated++;
     }
 
-
-    // ======================================
+    // ================================================
     // KANALLAR
-    // ======================================
+    // ================================================
 
     for (
-      const [rawName, channelType]
+      const [rawName, type]
       of categoryData.channels
     ) {
 
-      const name =
+      const channelName =
         formatChannelName(
           rawName,
           channelStyle
         );
 
-
-      const exists =
+      const existing =
         guild.channels.cache.find(
           channel =>
-            channel.name === name &&
-            channel.parentId ===
-              category.id
+            channel.name === channelName &&
+            channel.parentId === category.id
         );
 
-
-      if (exists) continue;
-
+      if (existing) continue;
 
       await guild.channels.create({
 
-        name,
+        name: channelName,
 
         type:
-          channelType === "voice"
+          type === "voice"
             ? ChannelType.GuildVoice
             : ChannelType.GuildText,
 
-        parent:
-          category.id
+        parent: category.id,
+
+        reason: "Endless Builder"
 
       });
-
 
       channelsCreated++;
     }
   }
-
 
   return {
     categoriesCreated,
@@ -1325,15 +1173,13 @@ async function buildServer(
   };
 }
 
+// ======================================================
+// CLEANUP
+// ======================================================
 
-// ==========================================
-// BUILDER KATEGORİLERİNİ BUL
-// ==========================================
-
-function getAllBuilderCategoryNames() {
+function getBuilderCategoryNames() {
 
   const names = new Set();
-
 
   for (
     const template
@@ -1361,33 +1207,21 @@ function getAllBuilderCategoryNames() {
     }
   }
 
-
   return names;
 }
 
-
-// ==========================================
-// ESKİ BUILDER YAPISINI TEMİZLE
-// ==========================================
-
-async function removeBuilderStructure(
-  guild
-) {
+async function removeBuilderStructure(guild) {
 
   const categoryNames =
-    getAllBuilderCategoryNames();
-
+    getBuilderCategoryNames();
 
   const categories =
     guild.channels.cache.filter(
       channel =>
         channel.type ===
           ChannelType.GuildCategory &&
-        categoryNames.has(
-          channel.name
-        )
+        categoryNames.has(channel.name)
     );
-
 
   for (
     const category
@@ -1397,10 +1231,8 @@ async function removeBuilderStructure(
     const children =
       guild.channels.cache.filter(
         channel =>
-          channel.parentId ===
-          category.id
+          channel.parentId === category.id
       );
-
 
     for (
       const channel
@@ -1408,13 +1240,10 @@ async function removeBuilderStructure(
     ) {
 
       try {
-
         await channel.delete(
-          "Endless Builder setup değiştirildi"
+          "Endless Builder değişikliği"
         );
-
       } catch (error) {
-
         console.error(
           "Kanal silinemedi:",
           error.message
@@ -1422,15 +1251,11 @@ async function removeBuilderStructure(
       }
     }
 
-
     try {
-
       await category.delete(
-        "Endless Builder setup değiştirildi"
+        "Endless Builder değişikliği"
       );
-
     } catch (error) {
-
       console.error(
         "Kategori silinemedi:",
         error.message
@@ -1438,14 +1263,9 @@ async function removeBuilderStructure(
     }
   }
 
+  // Roller
 
-  // ========================================
-  // ROLLER
-  // ========================================
-
-  const roleNames =
-    new Set();
-
+  const roleNames = new Set();
 
   for (
     const template
@@ -1453,14 +1273,12 @@ async function removeBuilderStructure(
   ) {
 
     for (
-      const role
+      const roleName
       of template.roles
     ) {
-
-      roleNames.add(role);
+      roleNames.add(roleName);
     }
   }
-
 
   const roles =
     guild.roles.cache.filter(
@@ -1468,7 +1286,6 @@ async function removeBuilderStructure(
         roleNames.has(role.name) &&
         !role.managed
     );
-
 
   for (
     const role
@@ -1478,7 +1295,7 @@ async function removeBuilderStructure(
     try {
 
       await role.delete(
-        "Endless Builder setup değiştirildi"
+        "Endless Builder değişikliği"
       );
 
     } catch (error) {
@@ -1487,14 +1304,14 @@ async function removeBuilderStructure(
         "Rol silinemedi:",
         error.message
       );
+
     }
   }
 }
 
-
-// ==========================================
+// ======================================================
 // READY
-// ==========================================
+// ======================================================
 
 client.once(
   "clientReady",
@@ -1503,7 +1320,6 @@ client.once(
     console.log(
       `✅ ${client.user.tag} aktif!`
     );
-
 
     try {
 
@@ -1519,25 +1335,23 @@ client.once(
 
       );
 
-
       console.log(
-        "✅ /setup komutları kaydedildi!"
+        "✅ Slash komutları hazır!"
       );
 
     } catch (error) {
 
       console.error(
-        "❌ Komut kayıt hatası:",
+        "❌ Slash komut hatası:",
         error
       );
     }
   }
 );
 
-
-// ==========================================
-// ETKİLEŞİMLER
-// ==========================================
+// ======================================================
+// INTERACTIONS
+// ======================================================
 
 client.on(
   "interactionCreate",
@@ -1545,190 +1359,184 @@ client.on(
 
     try {
 
-      const data =
-        loadData();
-
-
-      // ====================================
-      // /SETUP
-      // ====================================
+      // ==================================================
+      // CHAT COMMANDS
+      // ==================================================
 
       if (
-        interaction.isChatInputCommand() &&
-        interaction.commandName ===
-          "setup"
+        interaction.isChatInputCommand()
       ) {
 
-        const server =
-          data[interaction.guild.id];
+        // ================================================
+        // SETUP
+        // ================================================
 
+        if (
+          interaction.commandName ===
+          "setup"
+        ) {
 
-        if (server?.setupCompleted) {
+          const data =
+            loadData();
+
+          const server =
+            data[interaction.guildId];
+
+          if (server?.setupCompleted) {
+
+            return interaction.reply({
+
+              content:
+                "❌ **Bu sunucu zaten kurulmuş.**\n\n" +
+                "Değiştirmek için:\n" +
+                "`/setup-degistir`",
+
+              ephemeral: true
+
+            });
+          }
+
+          const row =
+            new ActionRowBuilder()
+              .addComponents(
+                createSetupMenu()
+              );
+
+          return interaction.reply({
+
+            content:
+              "╔══════════════════════════╗\n" +
+              "       🛠️ ENDLESS BUILDER\n" +
+              "╚══════════════════════════╝\n\n" +
+
+              "Sunucu türünü seç:\n\n" +
+
+              "🎮 Gaming\n" +
+              "👥 Community\n" +
+              "🎥 Streamer\n" +
+              "🌐 Public\n" +
+              "🛒 Shop\n" +
+              "🎓 Education\n" +
+              "🏆 Clan / Team",
+
+            components: [row],
+
+            ephemeral: true
+
+          });
+        }
+
+        // ================================================
+        // SETUP DEĞİŞTİR
+        // ================================================
+
+        if (
+          interaction.commandName ===
+          "setup-degistir"
+        ) {
+
+          const data =
+            loadData();
+
+          const server =
+            data[interaction.guildId];
+
+          if (!server?.setupCompleted) {
+
+            return interaction.reply({
+
+              content:
+                "❌ Bu sunucuda Builder kurulumu yok.\n\n" +
+                "`/setup` kullan.",
+
+              ephemeral: true
+
+            });
+          }
+
+          const row =
+            new ActionRowBuilder()
+              .addComponents(
+                createSetupMenu()
+              );
+
+          return interaction.reply({
+
+            content:
+              "⚠️ **Dikkat!**\n\n" +
+
+              "Mevcut Builder yapısı temizlenip\n" +
+              "yeni yapı oluşturulacak.\n\n" +
+
+              "Yeni sunucu türünü seç:",
+
+            components: [row],
+
+            ephemeral: true
+
+          });
+        }
+
+        // ================================================
+        // SETUP DURUM
+        // ================================================
+
+        if (
+          interaction.commandName ===
+          "setup-durum"
+        ) {
+
+          const data =
+            loadData();
+
+          const server =
+            data[interaction.guildId];
+
+          if (!server?.setupCompleted) {
+
+            return interaction.reply({
+
+              content:
+                "📊 **Builder Durumu**\n\n" +
+                "❌ Kurulum yapılmamış.\n\n" +
+                "`/setup` ile başlayabilirsin.",
+
+              ephemeral: true
+
+            });
+          }
 
           const template =
             templates[
               server.setupType
             ];
 
-
           return interaction.reply({
 
             content:
-              "❌ **Bu sunucu daha önce kuruldu!**\n\n" +
+              "📊 **Endless Builder**\n\n" +
 
-              `🏗️ Mevcut yapı: **${template?.emoji || "📁"} ${template?.label || server.setupType}**\n\n` +
+              `🏗️ Yapı: **${template?.emoji || "📁"} ${template?.label || server.setupType}**\n` +
 
-              "Yeni kurulum yapmak için:\n" +
+              `✨ Kanal: **${
+                server.channelStyle === "emoji"
+                  ? "Emoji'li"
+                  : "Emojisiz"
+              }**\n` +
 
-              "`/setup-degistir`",
+              `📂 Kategori: **${server.categoryStyle}**\n\n` +
+
+              "✅ Durum: **Aktif**",
 
             ephemeral: true
 
           });
         }
-
-
-        const row =
-          new ActionRowBuilder()
-            .addComponents(
-              createSetupMenu()
-            );
-
-
-        return interaction.reply({
-
-          content:
-            "╔══════════════════════════╗\n" +
-            "       🛠️ ENDLESS BUILDER\n" +
-            "╚══════════════════════════╝\n\n" +
-
-            "Sunucun için bir yapı seç.\n\n" +
-
-            "Builder seçtiğin yapıya göre\n" +
-            "kategori, kanal ve roller oluşturacak.",
-
-          components: [row],
-
-          ephemeral: true
-
-        });
       }
 
-
-      // ====================================
-      // /SETUP-DEGISTIR
-      // ====================================
-
-      if (
-        interaction.isChatInputCommand() &&
-        interaction.commandName ===
-          "setup-degistir"
-      ) {
-
-        const server =
-          data[interaction.guild.id];
-
-
-        if (!server?.setupCompleted) {
-
-          return interaction.reply({
-
-            content:
-              "❌ Bu sunucuda henüz Builder kurulumu yok.\n\n" +
-              "`/setup` kullanarak başlayabilirsin.",
-
-            ephemeral: true
-
-          });
-        }
-
-
-        const row =
-          new ActionRowBuilder()
-            .addComponents(
-              createSetupMenu()
-            );
-
-
-        return interaction.reply({
-
-          content:
-            "⚠️ **Builder kurulumu değiştirilecek!**\n\n" +
-
-            "Mevcut Builder kategorileri,\n" +
-            "kanalları ve rolleri temizlenecek.\n\n" +
-
-            "Yeni sunucu türünü seç:",
-
-          components: [row],
-
-          ephemeral: true
-
-        });
-      }
-
-
-      // ====================================
-      // /SETUP-DURUM
-      // ====================================
-
-      if (
-        interaction.isChatInputCommand() &&
-        interaction.commandName ===
-          "setup-durum"
-      ) {
-
-        const server =
-          data[interaction.guild.id];
-
-
-        if (!server?.setupCompleted) {
-
-          return interaction.reply({
-
-            content:
-              "📊 **Builder Durumu**\n\n" +
-
-              "❌ Henüz kurulum yapılmamış.\n\n" +
-
-              "Başlamak için `/setup` kullan.",
-
-            ephemeral: true
-
-          });
-        }
-
-
-        const template =
-          templates[
-            server.setupType
-          ];
-
-
-        return interaction.reply({
-
-          content:
-            "📊 **Endless Builder Durumu**\n\n" +
-
-            `🏗️ Yapı: **${template?.emoji || "📁"} ${template?.label || server.setupType}**\n` +
-
-            `✨ Kanal stili: **${channelStyles[server.channelStyle]?.label || "Emoji'li"}**\n` +
-
-            `📂 Kategori stili: **${categoryStyles[server.categoryStyle]?.label || "Emoji + Büyük Harf"}**\n` +
-
-            "✅ Kurulum: **Tamamlandı**\n" +
-
-            `📅 Kurulum zamanı: <t:${Math.floor(server.setupDate / 1000)}:R>`,
-
-          ephemeral: true
-
-        });
-      }
-
-
-      // ====================================
-      // SUNUCU TÜRÜ
-      // ====================================
+      // ==================================================
+      // SELECT MENU - TYPE
+      // ==================================================
 
       if (
         interaction.isStringSelectMenu() &&
@@ -1739,107 +1547,35 @@ client.on(
         const type =
           interaction.values[0];
 
-
         const template =
           templates[type];
-
 
         if (!template) {
 
           return interaction.update({
 
             content:
-              "❌ Geçersiz sunucu türü.",
+              "❌ Geçersiz seçim.",
 
             components: []
 
           });
         }
 
-
-        const dataNow =
+        const data =
           loadData();
 
+        const alreadySetup =
+          data[interaction.guildId]
+            ?.setupCompleted === true;
 
-        const server =
-          dataNow[
-            interaction.guild.id
-          ];
-
-
-        // ----------------------------------
-        // ESKİ KURULUM
-        // ----------------------------------
-
-        if (
-          server?.setupCompleted
-        ) {
-
-          setSetupSession(
-            interaction,
-            {
-              type,
-              changing: true
-            }
-          );
-
-
-          const buttons =
-            new ActionRowBuilder()
-              .addComponents(
-
-                new ButtonBuilder()
-                  .setCustomId(
-                    `change_start_${type}`
-                  )
-                  .setLabel(
-                    "Devam Et"
-                  )
-                  .setStyle(
-                    ButtonStyle.Primary
-                  ),
-
-                new ButtonBuilder()
-                  .setCustomId(
-                    "change_cancel"
-                  )
-                  .setLabel(
-                    "İptal"
-                  )
-                  .setStyle(
-                    ButtonStyle.Secondary
-                  )
-              );
-
-
-          return interaction.update({
-
-            content:
-              `⚠️ **${template.emoji} ${template.label}** seçildi.\n\n` +
-
-              "Mevcut Builder yapısı temizlenip\n" +
-              "yeni yapı oluşturulacak.\n\n" +
-
-              "Devam etmek istiyor musun?",
-
-            components: [buttons]
-
-          });
-        }
-
-
-        // ----------------------------------
-        // YENİ KURULUM
-        // ----------------------------------
-
-        setSetupSession(
+        setSession(
           interaction,
           {
             type,
-            changing: false
+            changing: alreadySetup
           }
         );
-
 
         const row =
           new ActionRowBuilder()
@@ -1847,26 +1583,27 @@ client.on(
               createChannelStyleMenu()
             );
 
-
         return interaction.update({
 
           content:
-            `🎯 **${template.emoji} ${template.label}** seçildi.\n\n` +
+            `✅ **${template.emoji} ${template.label}** seçildi.\n\n` +
 
-            "Şimdi kanal görünümünü seç:\n\n" +
+            "Şimdi kanal stilini seç:\n\n" +
 
-            "✨ Emoji'li → `💬・sohbet`\n" +
-            "⚪ Emojisiz → `sohbet`",
+            "✨ **Emoji'li**\n" +
+            "`💬・sohbet`\n\n" +
+
+            "⚪ **Emojisiz**\n" +
+            "`sohbet`",
 
           components: [row]
 
         });
       }
 
-
-      // ====================================
-      // KANAL STİLİ
-      // ====================================
+      // ==================================================
+      // SELECT MENU - CHANNEL STYLE
+      // ==================================================
 
       if (
         interaction.isStringSelectMenu() &&
@@ -1875,18 +1612,14 @@ client.on(
       ) {
 
         const session =
-          getSetupSession(
-            interaction
-          );
-
+          getSession(interaction);
 
         if (!session) {
 
           return interaction.update({
 
             content:
-              "❌ **Setup oturumu bulunamadı.**\n\n" +
-
+              "❌ Setup oturumu bulunamadı.\n\n" +
               "`/setup` ile tekrar başla.",
 
             components: []
@@ -1894,15 +1627,12 @@ client.on(
           });
         }
 
-
-        const selectedStyle =
+        const style =
           interaction.values[0];
 
-
         if (
-          !channelStyles[
-            selectedStyle
-          ]
+          style !== "emoji" &&
+          style !== "plain"
         ) {
 
           return interaction.update({
@@ -1915,16 +1645,13 @@ client.on(
           });
         }
 
-
         session.channelStyle =
-          selectedStyle;
+          style;
 
-
-        setSetupSession(
+        setSession(
           interaction,
           session
         );
-
 
         const row =
           new ActionRowBuilder()
@@ -1932,26 +1659,31 @@ client.on(
               createCategoryStyleMenu()
             );
 
-
         return interaction.update({
 
           content:
-            "📂 **Kategori görünümünü seç:**\n\n" +
+            "📂 **Kategori stilini seç:**\n\n" +
 
-            "📁 `📌 BİLGİ`\n" +
-            "「 `「 BİLGİ 」` 」\n" +
-            "━━ `━━ BİLGİ ━━`\n" +
-            "⚪ `BİLGİ`",
+            "📁 **Emoji + Büyük Harf**\n" +
+            "`📌 BİLGİ`\n\n" +
+
+            "🔲 **Köşeli**\n" +
+            "`「 BİLGİ 」`\n\n" +
+
+            "📏 **Çizgili**\n" +
+            "`━━ BİLGİ ━━`\n\n" +
+
+            "⚪ **Sade**\n" +
+            "`BİLGİ`",
 
           components: [row]
 
         });
       }
 
-
-      // ====================================
-      // KATEGORİ STİLİ
-      // ====================================
+      // ==================================================
+      // SELECT MENU - CATEGORY STYLE
+      // ==================================================
 
       if (
         interaction.isStringSelectMenu() &&
@@ -1960,18 +1692,14 @@ client.on(
       ) {
 
         const session =
-          getSetupSession(
-            interaction
-          );
-
+          getSession(interaction);
 
         if (!session) {
 
           return interaction.update({
 
             content:
-              "❌ **Setup oturumu bulunamadı.**\n\n" +
-
+              "❌ Setup oturumu bulunamadı.\n\n" +
               "`/setup` ile tekrar başla.",
 
             components: []
@@ -1979,15 +1707,16 @@ client.on(
           });
         }
 
-
-        const selectedStyle =
+        const style =
           interaction.values[0];
 
-
         if (
-          !categoryStyles[
-            selectedStyle
-          ]
+          ![
+            "emoji",
+            "brackets",
+            "lines",
+            "plain"
+          ].includes(style)
         ) {
 
           return interaction.update({
@@ -2000,16 +1729,13 @@ client.on(
           });
         }
 
-
         session.categoryStyle =
-          selectedStyle;
+          style;
 
-
-        setSetupSession(
+        setSession(
           interaction,
           session
         );
-
 
         const buttons =
           new ActionRowBuilder()
@@ -2036,25 +1762,22 @@ client.on(
                 .setStyle(
                   ButtonStyle.Secondary
                 )
-            );
 
+            );
 
         return interaction.update({
 
           content:
-            createSetupSummary(
-              session
-            ),
+            createSummary(session),
 
           components: [buttons]
 
         });
       }
 
-
-      // ====================================
-      // OLUŞTUR
-      // ====================================
+      // ==================================================
+      // BUTTON - CREATE
+      // ==================================================
 
       if (
         interaction.isButton() &&
@@ -2063,24 +1786,19 @@ client.on(
       ) {
 
         const session =
-          getSetupSession(
-            interaction
-          );
-
+          getSession(interaction);
 
         if (!session) {
 
           return interaction.update({
 
             content:
-              "❌ **Setup oturumu bulunamadı.**\n\n" +
-              "`/setup` ile tekrar başla.",
+              "❌ Setup oturumu bulunamadı.",
 
             components: []
 
           });
         }
-
 
         if (
           !session.type ||
@@ -2091,18 +1809,15 @@ client.on(
           return interaction.update({
 
             content:
-              "❌ Setup ayarları eksik.\n\n" +
-              "`/setup` ile tekrar başla.",
+              "❌ Setup bilgileri eksik.",
 
             components: []
 
           });
         }
 
-
         const template =
           templates[session.type];
-
 
         if (!template) {
 
@@ -2116,24 +1831,29 @@ client.on(
           });
         }
 
-
+        // ÖNCE interaction'ı cevapla
         await interaction.update({
 
           content:
-            `🚀 **${template.emoji} ${template.label}** kuruluyor...\n\n` +
+            "⏳ **Sunucu hazırlanıyor...**\n\n" +
 
             "📁 Kategoriler hazırlanıyor...\n" +
-            "💬 Kanallar oluşturuluyor...\n" +
-            "🎭 Roller hazırlanıyor...\n\n" +
-
-            "⏳ Lütfen bekle...",
+            "💬 Kanallar hazırlanıyor...\n" +
+            "🎭 Roller hazırlanıyor...",
 
           components: []
 
         });
 
-
         try {
+
+          // Değiştiriliyorsa eski yapıyı temizle
+          if (session.changing) {
+
+            await removeBuilderStructure(
+              interaction.guild
+            );
+          }
 
           const result =
             await buildServer(
@@ -2142,13 +1862,11 @@ client.on(
               session
             );
 
-
-          const dataNow =
+          const data =
             loadData();
 
-
-          dataNow[
-            interaction.guild.id
+          data[
+            interaction.guildId
           ] = {
 
             setupCompleted: true,
@@ -2167,41 +1885,36 @@ client.on(
 
           };
 
+          saveData(data);
 
-          saveData(
-            dataNow
-          );
-
-
-          deleteSetupSession(
+          deleteSession(
             interaction
           );
 
-
-          await interaction.editReply({
+          return interaction.editReply({
 
             content:
               "╔══════════════════════════╗\n" +
-              "       🎉 KURULUM TAMAMLANDI\n" +
+              "       🎉 KURULUM TAMAM\n" +
               "╚══════════════════════════╝\n\n" +
 
-              `🏗️ Yapı: **${template.emoji} ${template.label}**\n\n` +
+              `🏗️ **${template.emoji} ${template.label}**\n\n` +
 
-              `📁 Kategoriler: **${result.categoriesCreated}**\n` +
+              `📁 Kategori: **${result.categoriesCreated}**\n` +
+              `💬 Kanal: **${result.channelsCreated}**\n` +
+              `🎭 Rol: **${result.rolesCreated}**\n\n` +
 
-              `💬 Kanallar: **${result.channelsCreated}**\n` +
+              "✨ Kanal stili: **" +
+              (
+                session.channelStyle === "emoji"
+                  ? "Emoji'li"
+                  : "Emojisiz"
+              ) +
+              "**\n\n" +
 
-              `🎭 Roller: **${result.rolesCreated}**\n\n` +
+              "✅ Builder kurulumu tamamlandı!\n\n" +
 
-              `✨ Kanal stili: **${channelStyles[session.channelStyle].label}**\n` +
-
-              `📂 Kategori stili: **${categoryStyles[session.categoryStyle].label}**\n\n` +
-
-              "🔐 Builder ayarları kaydedildi.\n\n" +
-
-              "🚀 Bir sonraki aşamada Ticket,\n" +
-              "kayıt, moderasyon ve otomasyon\n" +
-              "sistemleri bağlanabilir.",
+              "`/setup-durum` ile durumu görebilirsin.",
 
             components: []
 
@@ -2210,37 +1923,33 @@ client.on(
         } catch (error) {
 
           console.error(
-            "Setup hatası:",
+            "❌ SUNUCU OLUŞTURMA HATASI:",
             error
           );
 
-
-          await interaction.editReply({
+          return interaction.editReply({
 
             content:
-              "❌ **Kurulum sırasında hata oluştu.**\n\n" +
+              "❌ **Sunucu oluşturulurken hata oluştu.**\n\n" +
 
-              "Botun şu yetkilere sahip olduğundan emin ol:\n\n" +
+              "Botun gerekli yetkilere sahip olduğundan emin ol:\n\n" +
 
               "• Kanalları Yönet\n" +
               "• Rolleri Yönet\n" +
-              "• Kanalları Gör\n\n" +
+              "• Kanalları Gör\n" +
+              "• Mesaj Gönder\n\n" +
 
-              `Hata: \`${error.message}\``,
+              `🔴 Hata: \`${error.message}\``,
 
             components: []
 
           });
-
         }
-
-        return;
       }
 
-
-      // ====================================
-      // SETUP İPTAL
-      // ====================================
+      // ==================================================
+      // BUTTON - CANCEL
+      // ==================================================
 
       if (
         interaction.isButton() &&
@@ -2248,10 +1957,9 @@ client.on(
           "setup_cancel"
       ) {
 
-        deleteSetupSession(
+        deleteSession(
           interaction
         );
-
 
         return interaction.update({
 
@@ -2263,105 +1971,21 @@ client.on(
         });
       }
 
-
-      // ====================================
-      // DEĞİŞTİR → DEVAM
-      // ====================================
-
-      if (
-        interaction.isButton() &&
-        interaction.customId.startsWith(
-          "change_start_"
-        )
-      ) {
-
-        const type =
-          interaction.customId.replace(
-            "change_start_",
-            ""
-          );
-
-
-        const template =
-          templates[type];
-
-
-        if (!template) {
-
-          return interaction.update({
-
-            content:
-              "❌ Şablon bulunamadı.",
-
-            components: []
-
-          });
-        }
-
-
-        setSetupSession(
-          interaction,
-          {
-            type,
-            changing: true
-          }
-        );
-
-
-        const row =
-          new ActionRowBuilder()
-            .addComponents(
-              createChannelStyleMenu()
-            );
-
-
-        return interaction.update({
-
-          content:
-            `⚙️ **${template.emoji} ${template.label}**\n\n` +
-
-            "Yeni sunucunun kanal stilini seç:",
-
-          components: [row]
-
-        });
-      }
-
-
-      // ====================================
-      // DEĞİŞTİR → İPTAL
-      // ====================================
-
-      if (
-        interaction.isButton() &&
-        interaction.customId ===
-          "change_cancel"
-      ) {
-
-        deleteSetupSession(
-          interaction
-        );
-
-
-        return interaction.update({
-
-          content:
-            "❌ **İşlem iptal edildi.**\n\n" +
-
-            "Mevcut sunucu yapın korunuyor.",
-
-          components: []
-
-        });
-      }
-
     } catch (error) {
 
       console.error(
-        "Interaction hatası:",
-        error
+        "================================"
       );
 
+      console.error(
+        "❌ INTERACTION HATASI"
+      );
+
+      console.error(error);
+
+      console.error(
+        "================================"
+      );
 
       try {
 
@@ -2373,7 +1997,7 @@ client.on(
           await interaction.followUp({
 
             content:
-              "❌ İşlem sırasında beklenmeyen bir hata oluştu.",
+              "❌ Beklenmeyen bir hata oluştu. Hatch loglarını kontrol et.",
 
             ephemeral: true
 
@@ -2384,11 +2008,12 @@ client.on(
           await interaction.reply({
 
             content:
-              "❌ İşlem sırasında beklenmeyen bir hata oluştu.",
+              "❌ Beklenmeyen bir hata oluştu. Hatch loglarını kontrol et.",
 
             ephemeral: true
 
           });
+
         }
 
       } catch {}
@@ -2397,18 +2022,47 @@ client.on(
   }
 );
 
+// ======================================================
+// ERROR LOGS
+// ======================================================
 
-// ==========================================
+process.on(
+  "unhandledRejection",
+  error => {
+
+    console.error(
+      "❌ Unhandled Rejection:",
+      error
+    );
+
+  }
+);
+
+process.on(
+  "uncaughtException",
+  error => {
+
+    console.error(
+      "❌ Uncaught Exception:",
+      error
+    );
+
+  }
+);
+
+// ======================================================
 // LOGIN
-// ==========================================
+// ======================================================
+
+if (!process.env.DISCORD_TOKEN) {
+
+  console.error(
+    "❌ DISCORD_TOKEN environment variable bulunamadı!"
+  );
+
+  process.exit(1);
+}
 
 client.login(
   process.env.DISCORD_TOKEN
-).catch(error => {
-
-  console.error(
-    "❌ Discord bağlantı hatası:",
-    error.message
-  );
-
-});
+);
