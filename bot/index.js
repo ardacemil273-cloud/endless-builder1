@@ -10,7 +10,11 @@ const {
   PermissionsBitField,
   EmbedBuilder,
   AttachmentBuilder,
-  UserSelectMenuBuilder
+  UserSelectMenuBuilder,
+  ModalBuilder,
+  TextInputBuilder,
+  TextInputStyle,
+  OverwriteType
 } = require("discord.js");
 
 const fs = require("fs");
@@ -47,7 +51,7 @@ if (!fs.existsSync(dataFile)) {
   fs.writeFileSync(dataFile, "{}");
 }
 
-const CONFIG_VERSION = 6;
+const CONFIG_VERSION = 8;
 let db = null;
 let saveTimer = null;
 
@@ -110,7 +114,8 @@ function defaultConfig() {
     antiRaid: { enabled: false, joinThreshold: 5, windowSec: 10, antiSpam: false, mentionSpam: false, channelDelete: false, roleDelete: false, webhook: false, punishment: "kick" },
     autoMod: { enabled: false, spam: false, flood: false, mentions: false, links: false, badWords: false, caps: false, punishment: "delete", timeoutMinutes: 10, maxMentions: 5, maxCapsPercent: 70, floodCount: 6, floodSec: 5, spamRepeat: 3, customWords: [] },
     toggles: { ticket: true, registration: true, streamer: true, rolePanel: true },
-    premium: { active: false, expiresAt: null }
+    premium: { active: false, expiresAt: null },
+    streamerPlus: { applications: { enabled: true, channelId: null, panelChannelId: null, reviewerRoleId: null, cooldownMin: 1440, counter: 0, records: {} }, adultRoleId: null, adultPanel: { channelId: null, messageId: null }, builds: {}, notifyRoleId: null, profiles: {}, announce: { channelId: null, cooldownMin: 30, last: {} } }
   };
 }
 
@@ -6108,6 +6113,872 @@ commands.push(
     .setName("premium").setDescription("Premium durumu ve plan limitleri").setDMPermission(false)
 );
 
+// ======================================================
+// AŞAMA 17: STREAMER+ / PUBLIC / +18 KURULUM SİSTEMİ
+// ======================================================
+// Komutlar: /streamer-kur, /streamer-kur-18, /public-kur, /public-kur-18,
+//           /streamer-basvuru-panel, /streamer-basvuru-ayarla, /yas-panel, /kurulum-sil
+// customId'ler: eb_sp_* (mevcut sistemlerle çakışmaz)
+
+const SP_PF = PermissionsBitField.Flags;
+const SP_BUILDING = new Set();
+const SP_ADULT_ROLE_NAME = "🔞 18+";
+const spSleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+// t: [emoji, isim, bayraklar]  |  bayraklar: ro=salt okunur, st="only"|"post", apply, applog, log, rules
+const SP_PRESETS = {
+  streamer: {
+    label: "Streamer", emoji: "🎥",
+    categories: [
+      { name: "BİLGİ", emoji: "📌", texts: [
+        ["📜", "kurallar", { ro: 1, rules: 1 }], ["📢", "duyurular", { ro: 1 }], ["ℹ️", "bilgilendirme", { ro: 1 }]
+      ] },
+      { name: "STREAMER", emoji: "🎥", texts: [
+        ["📺", "yayın-duyuruları", { ro: 1, st: "post" }],
+        ["🎥", "yayıncı-sohbet", { st: "only" }],
+        ["📝", "streamer-başvuru", { ro: 1, apply: 1 }],
+        ["📅", "yayın-programı", { ro: 1, st: "post" }],
+        ["🎬", "klipler", {}],
+        ["🌟", "yayıncılar", { ro: 1, st: "post" }]
+      ] },
+      { name: "TOPLULUK", emoji: "👥", texts: [
+        ["💬", "sohbet", {}], ["🖼️", "medya", {}], ["🤖", "bot-komutları", {}], ["💡", "öneriler", {}]
+      ] },
+      { name: "DESTEK", emoji: "🆘", texts: [["🎫", "ticket", { ro: 1 }], ["🆘", "destek", {}]] },
+      { name: "SES", emoji: "🔊", voice: true },
+      { name: "YÖNETİM", emoji: "🔒", staff: true, texts: [
+        ["🛡️", "yetkili", {}], ["📋", "başvuru-log", { applog: 1 }], ["📜", "log", { log: 1 }]
+      ] }
+    ]
+  },
+  public: {
+    label: "Public", emoji: "🌐",
+    categories: [
+      { name: "BİLGİ", emoji: "📌", texts: [
+        ["📜", "kurallar", { ro: 1, rules: 1 }], ["📢", "duyurular", { ro: 1 }],
+        ["👋", "hoş-geldin", { ro: 1 }], ["ℹ️", "bilgilendirme", { ro: 1 }]
+      ] },
+      { name: "SOHBET", emoji: "💬", texts: [
+        ["💬", "genel-sohbet", {}], ["🖼️", "medya", {}], ["📸", "fotoğraflar", {}], ["💡", "öneriler", {}]
+      ] },
+      { name: "EĞLENCE", emoji: "🎮", texts: [
+        ["🎮", "oyun-sohbet", {}], ["😂", "memes", {}], ["🎵", "müzik", {}], ["🎁", "çekilişler", { ro: 1 }], ["🤖", "bot-komutları", {}]
+      ] },
+      { name: "DESTEK", emoji: "🆘", texts: [["🎫", "ticket", { ro: 1 }], ["🆘", "destek", {}]] },
+      { name: "SES", emoji: "🔊", voice: true },
+      { name: "YÖNETİM", emoji: "🔒", staff: true, texts: [
+        ["🛡️", "yetkili", {}], ["📜", "log", { log: 1 }]
+      ] }
+    ]
+  }
+};
+
+function spCfg(config) {
+  config.streamerPlus ??= {};
+  applyDefaults(config.streamerPlus, defaultConfig().streamerPlus);
+  return config.streamerPlus;
+}
+
+async function spEnsureRole(guild, config, key, name, extra, rec) {
+  const sp = spCfg(config);
+  config.createdIds ??= { categories: [], channels: [], roles: [] };
+  const id = key === "adult" ? sp.adultRoleId : config.roles?.[key];
+  let role = id ? (guild.roles.cache.get(id) || await guild.roles.fetch(id).catch(() => null)) : null;
+  if (!role) role = guild.roles.cache.find(r => r.name === name && !r.managed) || null;
+  if (!role) {
+    role = await guild.roles.create({ name, reason: "Endless Builder", ...extra });
+    config.createdIds.roles.push(role.id);
+    rec?.roles.push(role.id);
+    await spSleep(250);
+  }
+  if (key === "adult") sp.adultRoleId = role.id;
+  else { config.roles ??= {}; config.roles[key] = role.id; }
+  return role;
+}
+
+function spOverwrites(ctx, f = {}) {
+  const map = new Map();
+  const get = id => { if (!map.has(id)) map.set(id, { id, allow: [], deny: [] }); return map.get(id); };
+  const V = SP_PF.ViewChannel, S = SP_PF.SendMessages, ev = ctx.guild.id;
+  if (ctx.me) get(ctx.me).allow.push(V, S, SP_PF.EmbedLinks, SP_PF.ManageMessages);
+  if (f.staffOnly) { get(ev).deny.push(V); get(ctx.staff.id).allow.push(V, S); }
+  else if (f.st === "only" && ctx.streamer) { get(ev).deny.push(V); get(ctx.streamer.id).allow.push(V, S); get(ctx.staff.id).allow.push(V, S); }
+  else if (f.adult && ctx.adult) { get(ev).deny.push(V); get(ctx.adult.id).allow.push(V); get(ctx.staff.id).allow.push(V, S); }
+  if (f.ro) {
+    const gate = f.adult && ctx.adult ? ctx.adult.id : ev;
+    get(gate).deny.push(S, SP_PF.CreatePublicThreads, SP_PF.CreatePrivateThreads);
+    get(ctx.staff.id).allow.push(S);
+    if (f.st === "post" && ctx.streamer) get(ctx.streamer.id).allow.push(S);
+  }
+  return [...map.values()].map(o => ({
+    id: o.id, type: o.id === ctx.me ? OverwriteType.Member : OverwriteType.Role, allow: o.allow, deny: o.deny
+  }));
+}
+
+function spVoiceOverwrites(ctx, f = {}) {
+  const map = new Map();
+  const get = id => { if (!map.has(id)) map.set(id, { id, allow: [], deny: [] }); return map.get(id); };
+  const V = SP_PF.ViewChannel, C = SP_PF.Connect, ev = ctx.guild.id;
+  if (ctx.me) get(ctx.me).allow.push(V, C);
+  if (f.adult && ctx.adult) { get(ev).deny.push(V, C); get(ctx.adult.id).allow.push(V, C); get(ctx.staff.id).allow.push(V, C); }
+  if (f.st && ctx.streamer) { get(ev).deny.push(SP_PF.Stream); get(ctx.streamer.id).allow.push(SP_PF.Stream); get(ctx.staff.id).allow.push(SP_PF.Stream); }
+  return [...map.values()].map(o => ({
+    id: o.id, type: o.id === ctx.me ? OverwriteType.Member : OverwriteType.Role, allow: o.allow, deny: o.deny
+  }));
+}
+
+function spRulesEmbed(label, adult) {
+  const lines = [
+    "1️⃣ Herkese saygılı davran; hakaret, taciz ve nefret söylemi yasaktır.",
+    "2️⃣ Spam, flood ve reklam yasaktır.",
+    "3️⃣ Kişisel bilgileri (adres, telefon vb.) paylaşma.",
+    "4️⃣ Yetkililerin kararlarına uy; itirazlar için ticket aç.",
+    "5️⃣ Discord Hizmet Şartları ve Topluluk Kurallarına uymak zorunludur."
+  ];
+  if (adult) lines.push("🔞 **+18 alanı:** yalnızca 18 yaşından büyükler içindir. Reşit olmayanlara ilişkin herhangi bir içerik kesinlikle yasaktır ve anında ban sebebidir.");
+  return new EmbedBuilder().setColor(0x5865f2).setTitle(`📜 ${label} • Sunucu Kuralları`).setDescription(lines.join("\n")).setFooter({ text: BRAND_FOOTER });
+}
+
+function spApplyPanel() {
+  return {
+    embeds: [new EmbedBuilder().setColor(0x9146ff).setTitle("🎥 ・ Streamer Başvurusu")
+      .setDescription("Yayıncı olmak mı istiyorsun?\nAşağıdaki butona basıp formu doldur. Yetkililer başvurunu inceleyip sonucu sana bildirecek.")
+      .setFooter({ text: BRAND_FOOTER })],
+    components: [new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId("eb_sp_apply").setLabel("Başvuru Yap").setEmoji("📝").setStyle(ButtonStyle.Primary)
+    )]
+  };
+}
+
+function spAdultPanel() {
+  return {
+    embeds: [new EmbedBuilder().setColor(0xed4245).setTitle("🔞 ・ +18 Erişim Doğrulaması")
+      .setDescription(
+        "+18 kanallarını görmek için **18 yaşından büyük olduğunu** beyan etmelisin.\n\n" +
+        "• Yanlış beyan hesabının kısıtlanmasına yol açabilir.\n" +
+        "• +18 alanındaki kurallara uymak zorundasın.\n" +
+        "• İstediğin zaman erişimi bırakabilirsin."
+      ).setFooter({ text: BRAND_FOOTER })],
+    components: [new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId("eb_sp_adult_start").setLabel("18+ Erişim Al").setEmoji("🔞").setStyle(ButtonStyle.Danger),
+      new ButtonBuilder().setCustomId("eb_sp_adult_leave").setLabel("Erişimi Bırak").setStyle(ButtonStyle.Secondary)
+    )]
+  };
+}
+
+async function spBuild(interaction, key, adult) {
+  const guild = interaction.guild;
+  if (!isAdmin(interaction)) return deny(interaction, "❌ Bu komut için **Yönetici** yetkisi gerekir.");
+  const lack = botLacks(interaction, F.ManageChannels, "Kanalları Yönet") || botLacks(interaction, F.ManageRoles, "Rolleri Yönet");
+  if (lack) return deny(interaction, lack);
+  if (SP_BUILDING.has(guild.id)) return deny(interaction, "⏳ Bu sunucuda zaten bir kurulum çalışıyor, bitmesini bekle.");
+
+  const config = ensureExtraConfig(getServerConfig(guild.id));
+  const sp = spCfg(config);
+  config.createdIds ??= { categories: [], channels: [], roles: [] };
+  const buildKey = adult ? `${key}-18` : key;
+  const preset = SP_PRESETS[key];
+  const prev = sp.builds[buildKey];
+  if (prev?.categories?.some(id => guild.channels.cache.has(id))) {
+    return deny(interaction, `❌ **${preset.label}${adult ? " +18" : ""}** kurulumu zaten var.\nKaldırmak için \`/kurulum-sil\` kullan.`);
+  }
+
+  const o = interaction.options;
+  const chStyle = (o.getBoolean("emoji") ?? true) ? "emoji" : "plain";
+  const catStyle = o.getString("kategori_stili") || "emoji";
+  const cap = getLimits(guild.id).voice;
+  const capV = n => (Number.isFinite(cap) ? Math.min(n, cap) : n);
+  const notes = [];
+  let voiceMain = clampInt(o.getInteger("ses") ?? 4, 1, 25, 4);
+  let voiceStream = key === "streamer" ? clampInt(o.getInteger("yayin_ses") ?? 2, 0, 10, 2) : 0;
+  let voiceAdult = adult ? clampInt(o.getInteger("ses_18") ?? 2, 0, 10, 2) : 0;
+  if (capV(voiceMain) !== voiceMain || capV(voiceStream) !== voiceStream || capV(voiceAdult) !== voiceAdult) {
+    voiceMain = capV(voiceMain); voiceStream = capV(voiceStream); voiceAdult = capV(voiceAdult);
+    notes.push(`Free plan ses limiti (${cap}) uygulandı.`);
+  }
+  const applyOn = key === "streamer" && (o.getBoolean("basvuru") ?? true);
+
+  // Plan
+  const chName = (e, n) => (chStyle === "emoji" ? `${e}・${n}` : n);
+  const plan = [];
+  for (const c of preset.categories) {
+    const item = { name: c.name, emoji: c.emoji, staff: Boolean(c.staff), adult: false, texts: [], voices: [] };
+    for (const [e, n, f] of c.texts || []) {
+      if ((f.apply || f.applog) && !applyOn) continue;
+      item.texts.push({ e, n, f });
+    }
+    if (c.voice) {
+      for (let i = 1; i <= voiceMain; i++) item.voices.push({ name: chStyle === "emoji" ? `🔊・Sohbet ${i}` : `Sohbet ${i}`, f: {} });
+      for (let i = 1; i <= voiceStream; i++) item.voices.push({ name: chStyle === "emoji" ? `🎥・Yayın Odası ${i}` : `Yayın Odası ${i}`, f: { st: 1 } });
+      item.voices.push({ name: chStyle === "emoji" ? "💤・AFK" : "AFK", f: {} });
+    }
+    plan.push(item);
+  }
+  if (adult) {
+    plan.push({ name: "+18 GİRİŞ", emoji: "🔞", staff: false, adult: false, voices: [], texts: [
+      { e: "📜", n: "18-kurallar", f: { ro: 1, rules18: 1 } }, { e: "✅", n: "18-doğrulama", f: { ro: 1, verify: 1 } }
+    ] });
+    const adultTexts = key === "streamer"
+      ? [["🔞", "18-sohbet"], ["🖼️", "18-medya"], ["🎥", "18-yayın-sohbet"]]
+      : [["🔞", "18-sohbet"], ["🖼️", "18-medya"], ["📸", "18-fotoğraflar"]];
+    const voices = [];
+    for (let i = 1; i <= voiceAdult; i++) voices.push({ name: chStyle === "emoji" ? `🔞・+18 Ses ${i}` : `+18 Ses ${i}`, f: { adult: 1 } });
+    plan.push({ name: "+18", emoji: "🔞", staff: false, adult: true, voices, texts: adultTexts.map(([e, n]) => ({ e, n, f: {} })) });
+  }
+
+  const total = plan.reduce((s, c) => s + 1 + c.texts.length + c.voices.length, 0);
+  if (guild.channels.cache.size + total > 495) {
+    return deny(interaction, `❌ Kanal limiti aşılır (${guild.channels.cache.size} mevcut + ${total} yeni). Önce bazı kanalları sil.`);
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+  SP_BUILDING.add(guild.id);
+  const rec = { at: Date.now(), categories: [], channels: [], roles: [] };
+  let made = 0;
+
+  try {
+    const staff = await spEnsureRole(guild, config, "staff", "🛡️ Yetkili", {
+      color: 0x5865f2,
+      permissions: [SP_PF.ManageMessages, SP_PF.KickMembers, SP_PF.ModerateMembers, SP_PF.MuteMembers, SP_PF.MoveMembers]
+    }, rec);
+    const streamer = key === "streamer" ? await spEnsureRole(guild, config, "streamer", "🎥 Streamer", { color: 0x9146ff, hoist: true }, rec) : null;
+    const adultRole = adult ? await spEnsureRole(guild, config, "adult", SP_ADULT_ROLE_NAME, { color: 0xed4245 }, rec) : null;
+    const ctx = { guild, me: guild.members.me?.id, staff, streamer, adult: adultRole };
+
+    for (const cat of plan) {
+      const catOw = cat.staff ? spOverwrites(ctx, { staffOnly: true }) : cat.adult ? spOverwrites(ctx, { adult: true }) : [];
+      const category = await guild.channels.create({
+        name: formatCategoryName({ name: cat.name, emoji: cat.emoji }, catStyle),
+        type: ChannelType.GuildCategory, permissionOverwrites: catOw, reason: "Endless Builder"
+      });
+      config.createdIds.categories.push(category.id); rec.categories.push(category.id);
+      await spSleep(250);
+
+      for (const t of cat.texts) {
+        const flags = { ...t.f, staffOnly: cat.staff, adult: cat.adult };
+        const ch = await guild.channels.create({
+          name: chName(t.e, t.n), type: ChannelType.GuildText, parent: category.id,
+          nsfw: cat.adult, permissionOverwrites: spOverwrites(ctx, flags), reason: "Endless Builder"
+        });
+        config.createdIds.channels.push(ch.id); rec.channels.push(ch.id); made++;
+        await spSleep(250);
+
+        if (t.f.log && !config.channels?.log) { config.channels ??= {}; config.channels.log = ch.id; }
+        if (t.f.applog) sp.applications.channelId = ch.id;
+        if (t.n === "yayın-duyuruları") {
+          sp.announce.channelId = ch.id;
+          const nr = await spGetNotifyRole(guild, config, true).catch(() => null);
+          if (nr) { rec.roles.push(nr.id); await ch.send(spNotifyPanel()).catch(() => {}); }
+        }
+        if (t.f.apply) { sp.applications.panelChannelId = ch.id; await ch.send(spApplyPanel()).catch(() => {}); }
+        if (t.f.rules) await ch.send({ embeds: [spRulesEmbed(preset.label, false)] }).catch(() => {});
+        if (t.f.rules18) await ch.send({ embeds: [spRulesEmbed(preset.label, true)] }).catch(() => {});
+        if (t.f.verify) {
+          const m = await ch.send(spAdultPanel()).catch(() => null);
+          sp.adultPanel = { channelId: ch.id, messageId: m?.id || null };
+        }
+      }
+
+      for (const v of cat.voices) {
+        const vc = await guild.channels.create({
+          name: v.name, type: ChannelType.GuildVoice, parent: category.id,
+          permissionOverwrites: spVoiceOverwrites(ctx, v.f), reason: "Endless Builder"
+        });
+        config.createdIds.channels.push(vc.id); rec.channels.push(vc.id); made++;
+        await spSleep(250);
+      }
+    }
+
+    sp.builds[buildKey] = rec;
+    saveServerConfig(guild.id, config);
+    await sendLog(guild, `🛠️ ${interaction.user} **${preset.label}${adult ? " +18" : ""}** kurulumunu tamamladı (${plan.length} kategori, ${made} kanal).`);
+
+    const embed = new EmbedBuilder().setColor(0x57f287)
+      .setTitle(`${preset.emoji} ${preset.label}${adult ? " +18" : ""} kurulumu tamamlandı`)
+      .addFields(
+        { name: "📁 Kategori", value: String(plan.length), inline: true },
+        { name: "💬 Kanal", value: String(made), inline: true },
+        { name: "🔊 Ses", value: `Genel ${voiceMain}${voiceStream ? ` • Yayın ${voiceStream}` : ""}${adult ? ` • +18 ${voiceAdult}` : ""}`, inline: true }
+      ).setFooter({ text: BRAND_FOOTER });
+    const tips = [];
+    if (applyOn) tips.push("📝 Başvurular `başvuru-log` kanalına düşer. `/streamer-basvuru-ayarla` ile değiştirebilirsin.");
+    if (adult) tips.push("🔞 +18 kanalları yaş sınırlı (NSFW) ve yalnızca doğrulanan üyelere görünür.");
+    tips.push("⚠️ Bot rolünü, oluşturulan rollerin **üstüne** taşımayı unutma.");
+    embed.setDescription([...tips, ...notes].join("\n"));
+    await interaction.editReply({ embeds: [embed] });
+  } catch (error) {
+    console.error("SP BUILD ERROR:", error);
+    sp.builds[buildKey] = rec;
+    saveServerConfig(guild.id, config);
+    await interaction.editReply({ content: `❌ Kurulum yarıda kaldı (${made} kanal oluşturuldu). Kalanları \`/kurulum-sil\` ile temizleyip tekrar deneyebilirsin.` }).catch(() => {});
+  } finally {
+    SP_BUILDING.delete(guild.id);
+  }
+}
+
+async function spRemoveBuild(interaction, buildKey) {
+  const guild = interaction.guild;
+  if (!isAdmin(interaction)) return deny(interaction, "❌ Bu komut için **Yönetici** yetkisi gerekir.");
+  const config = getServerConfig(guild.id);
+  const sp = spCfg(config);
+  const rec = sp.builds[buildKey];
+  if (!rec) return deny(interaction, "ℹ️ Bu kurulum kaydı bulunamadı.");
+  await interaction.deferReply({ ephemeral: true });
+  let deleted = 0;
+  for (const id of [...rec.channels, ...rec.categories]) {
+    const ch = await guild.channels.fetch(id).catch(() => null);
+    if (!ch) continue;
+    await ch.delete("Endless Builder kurulum silindi").then(() => { deleted++; }).catch(() => {});
+    await spSleep(250);
+  }
+  for (const list of [config.createdIds?.channels, config.createdIds?.categories]) {
+    if (!Array.isArray(list)) continue;
+    for (let i = list.length - 1; i >= 0; i--) if (rec.channels.includes(list[i]) || rec.categories.includes(list[i])) list.splice(i, 1);
+  }
+  delete sp.builds[buildKey];
+  saveServerConfig(guild.id, config);
+  await sendLog(guild, `🗑️ ${interaction.user} **${buildKey}** kurulumunu sildi (${deleted} kanal/kategori). Roller korundu.`);
+  await interaction.editReply({ content: `🗑️ ${deleted} kanal/kategori silindi. Roller silinmedi.` });
+}
+
+function spInput(id, label, style, max, min = 1) {
+  return new ActionRowBuilder().addComponents(
+    new TextInputBuilder().setCustomId(id).setLabel(label).setStyle(style).setMinLength(min).setMaxLength(max).setRequired(true)
+  );
+}
+
+function spStreamerRole(guild, config) {
+  const id = config.roles?.streamer;
+  return (id && guild.roles.cache.get(id)) || guild.roles.cache.find(r => r.name === "🎥 Streamer") || null;
+}
+
+function spCanReview(interaction, config) {
+  const sp = spCfg(config);
+  const m = interaction.member;
+  return Boolean(
+    interaction.guild.ownerId === interaction.user.id ||
+    interaction.memberPermissions?.has(SP_PF.Administrator) ||
+    interaction.memberPermissions?.has(SP_PF.ManageRoles) ||
+    (sp.applications.reviewerRoleId && m?.roles?.cache?.has(sp.applications.reviewerRoleId)) ||
+    (config.roles?.staff && m?.roles?.cache?.has(config.roles.staff))
+  );
+}
+
+function spApplicationGuard(interaction, config) {
+  const sp = spCfg(config);
+  const app = sp.applications;
+  if (!config.toggles.streamer) return "❌ Streamer sistemi bu sunucuda kapalı.";
+  if (!app.enabled) return "❌ Streamer başvuruları şu an kapalı.";
+  if (!app.channelId) return "❌ Başvuru kanalı ayarlanmamış. Yetkililer `/streamer-basvuru-ayarla` kullansın.";
+  const role = spStreamerRole(interaction.guild, config);
+  if (role && interaction.member.roles.cache.has(role.id)) return "ℹ️ Zaten Streamer rolün var.";
+  const rec = app.records[interaction.user.id];
+  if (rec?.status === "pending") return "⏳ Zaten bekleyen bir başvurun var.";
+  if (rec?.status === "rejected" && app.cooldownMin > 0) {
+    const left = rec.at + app.cooldownMin * 60000 - Date.now();
+    if (left > 0) return `⏳ Yeni başvuru için **${Math.ceil(left / 60000)} dakika** beklemelisin.`;
+  }
+  return null;
+}
+
+async function spDm(userId, text) {
+  try { const u = await client.users.fetch(userId); await u.send(text); } catch {}
+}
+
+const SP_BUILD_CMDS = {
+  "streamer-kur": ["streamer", false], "streamer-kur-18": ["streamer", true],
+  "public-kur": ["public", false], "public-kur-18": ["public", true]
+};
+
+async function handleStreamerPlus(interaction, config) {
+  try {
+    const sp = spCfg(config);
+
+    if (interaction.isChatInputCommand()) {
+      const n = interaction.commandName;
+      if (SP_BUILD_CMDS[n]) { await spBuild(interaction, ...SP_BUILD_CMDS[n]); return true; }
+      if (n === "kurulum-sil") {
+        if (!interaction.options.getBoolean("onay")) { await deny(interaction, "❌ Silmek için `onay` seçeneğini **True** yapmalısın."); return true; }
+        await spRemoveBuild(interaction, interaction.options.getString("tur")); return true;
+      }
+      if (n === "streamer-basvuru-panel") {
+        if (!canManageGuild(interaction)) { await deny(interaction, "❌ Bu komut için **Sunucuyu Yönet** yetkisi gerekir."); return true; }
+        if (!config.toggles.streamer) { await deny(interaction, "❌ Streamer sistemi bu sunucuda kapalı."); return true; }
+        const ch = interaction.options.getChannel("kanal") || interaction.channel;
+        await ch.send(spApplyPanel());
+        sp.applications.panelChannelId = ch.id; saveServerConfig(interaction.guildId, config);
+        await respond(interaction, { content: `✅ Başvuru paneli ${ch} kanalına gönderildi.${sp.applications.channelId ? "" : "\n⚠️ Başvuru kanalı yok: `/streamer-basvuru-ayarla kanal:` ile seç."}`, ephemeral: true });
+        return true;
+      }
+      if (n === "streamer-basvuru-ayarla") {
+        if (!canManageGuild(interaction)) { await deny(interaction, "❌ Bu komut için **Sunucuyu Yönet** yetkisi gerekir."); return true; }
+        const o = interaction.options, a = sp.applications;
+        const ch = o.getChannel("kanal"), rev = o.getRole("yetkili_rol"), st = o.getRole("streamer_rol");
+        const cd = o.getInteger("bekleme"), on = o.getBoolean("aktif");
+        if (ch) a.channelId = ch.id;
+        if (rev) a.reviewerRoleId = rev.id;
+        if (st) config.roles.streamer = st.id;
+        if (cd !== null) a.cooldownMin = cd;
+        if (on !== null) a.enabled = on;
+        saveServerConfig(interaction.guildId, config);
+        await respond(interaction, { embeds: [new EmbedBuilder().setColor(0x9146ff).setTitle("🎥 Streamer Başvuru Ayarları").addFields(
+          { name: "Durum", value: a.enabled ? "🟢 Açık" : "🔴 Kapalı", inline: true },
+          { name: "Başvuru kanalı", value: a.channelId ? `<#${a.channelId}>` : "—", inline: true },
+          { name: "Yetkili rol", value: a.reviewerRoleId ? `<@&${a.reviewerRoleId}>` : "Yetkili rolü / Rolleri Yönet", inline: true },
+          { name: "Streamer rolü", value: config.roles.streamer ? `<@&${config.roles.streamer}>` : "—", inline: true },
+          { name: "Red sonrası bekleme", value: `${a.cooldownMin} dk`, inline: true }
+        ).setFooter({ text: BRAND_FOOTER })], ephemeral: true });
+        return true;
+      }
+      if (n === "yas-panel") {
+        if (!canManageGuild(interaction)) { await deny(interaction, "❌ Bu komut için **Sunucuyu Yönet** yetkisi gerekir."); return true; }
+        const lack = botLacks(interaction, F.ManageRoles, "Rolleri Yönet");
+        if (lack) { await deny(interaction, lack); return true; }
+        await interaction.deferReply({ ephemeral: true });
+        const given = interaction.options.getRole("rol");
+        if (given) sp.adultRoleId = given.id;
+        else await spEnsureRole(interaction.guild, config, "adult", SP_ADULT_ROLE_NAME, { color: 0xed4245 }, null);
+        const ch = interaction.options.getChannel("kanal") || interaction.channel;
+        const m = await ch.send(spAdultPanel());
+        sp.adultPanel = { channelId: ch.id, messageId: m.id };
+        saveServerConfig(interaction.guildId, config);
+        await interaction.editReply({ content: `✅ +18 doğrulama paneli ${ch} kanalına gönderildi. Rol: <@&${sp.adultRoleId}>\nℹ️ +18 kanallarını bu role özel yapıp **Yaş Sınırlı** işaretlemeyi unutma.` });
+        return true;
+      }
+      return false;
+    }
+
+    const id = interaction.customId || "";
+    if (!id.startsWith("eb_sp_")) return false;
+
+    if (interaction.isButton()) {
+      if (id === "eb_sp_apply") {
+        const err = spApplicationGuard(interaction, config);
+        if (err) { await deny(interaction, err); return true; }
+        await interaction.showModal(
+          new ModalBuilder().setCustomId("eb_sp_apply_modal").setTitle("Streamer Başvurusu").addComponents(
+            spInput("platform", "Yayın platformu (Twitch, YouTube, Kick...)", TextInputStyle.Short, 50),
+            spInput("link", "Kanal linki (https://...)", TextInputStyle.Short, 200, 8),
+            spInput("content", "Ne yayınlıyorsun?", TextInputStyle.Short, 100),
+            spInput("about", "Kendini kısaca tanıt", TextInputStyle.Paragraph, 700, 20)
+          )
+        );
+        return true;
+      }
+
+      if (id.startsWith("eb_sp_ok:") || id.startsWith("eb_sp_no:")) {
+        const uid = id.split(":")[1];
+        if (!spCanReview(interaction, config)) { await deny(interaction, "❌ Başvuruları değerlendirme yetkin yok."); return true; }
+        const rec = sp.applications.records[uid];
+        if (!rec || rec.status !== "pending") { await deny(interaction, "ℹ️ Bu başvuru zaten sonuçlanmış."); return true; }
+
+        if (id.startsWith("eb_sp_no:")) {
+          await interaction.showModal(
+            new ModalBuilder().setCustomId(`eb_sp_no_modal:${uid}`).setTitle("Başvuruyu Reddet")
+              .addComponents(new ActionRowBuilder().addComponents(
+                new TextInputBuilder().setCustomId("reason").setLabel("Red sebebi (opsiyonel)").setStyle(TextInputStyle.Paragraph).setMaxLength(300).setRequired(false)
+              ))
+          );
+          return true;
+        }
+
+        const role = spStreamerRole(interaction.guild, config);
+        if (!role) { await deny(interaction, "❌ Streamer rolü bulunamadı. `/streamer-basvuru-ayarla streamer_rol:` ile seç."); return true; }
+        const me = interaction.guild.members.me;
+        if (!me || role.position >= me.roles.highest.position) { await deny(interaction, "❌ Streamer rolünü veremiyorum. Bot rolünü Streamer rolünün üzerine taşı."); return true; }
+        const member = await interaction.guild.members.fetch(uid).catch(() => null);
+        if (!member) {
+          rec.status = "left"; saveServerConfig(interaction.guildId, config);
+          await interaction.update({ components: [] });
+          return true;
+        }
+        await member.roles.add(role, `Streamer başvurusu onaylandı: ${interaction.user.tag}`);
+        rec.status = "approved"; rec.by = interaction.user.id; rec.at = Date.now();
+        saveServerConfig(interaction.guildId, config);
+        const embed = EmbedBuilder.from(interaction.message.embeds[0]).setColor(0x57f287)
+          .addFields({ name: "✅ Karar", value: `Onaylandı • ${interaction.user}`, inline: false });
+        await interaction.update({ embeds: [embed], components: [] });
+        await spDm(uid, `🎉 **${interaction.guild.name}** sunucusundaki Streamer başvurun **onaylandı**!`);
+        await sendLog(interaction.guild, `🎥 ${interaction.user} <@${uid}> kullanıcısının streamer başvurusunu onayladı.`);
+        return true;
+      }
+
+      // ---- +18 doğrulama ----
+      if (id.startsWith("eb_sp_adult_")) {
+        const role = (sp.adultRoleId && interaction.guild.roles.cache.get(sp.adultRoleId)) ||
+          interaction.guild.roles.cache.find(r => r.name === SP_ADULT_ROLE_NAME);
+        if (!role) { await deny(interaction, "❌ +18 rolü bulunamadı. Yetkililer `/yas-panel` kullansın."); return true; }
+        const me = interaction.guild.members.me;
+        if (id === "eb_sp_adult_start") {
+          if (interaction.member.roles.cache.has(role.id)) { await deny(interaction, "ℹ️ Zaten +18 erişimin var."); return true; }
+          await interaction.reply({
+            ephemeral: true,
+            content: "🔞 **18 yaşından büyük olduğunu beyan ediyor musun?**\nYanlış beyan hesabının kısıtlanmasına sebep olabilir.",
+            components: [new ActionRowBuilder().addComponents(
+              new ButtonBuilder().setCustomId("eb_sp_adult_yes").setLabel("Evet, 18 yaşından büyüğüm").setStyle(ButtonStyle.Danger),
+              new ButtonBuilder().setCustomId("eb_sp_adult_no").setLabel("Vazgeç").setStyle(ButtonStyle.Secondary)
+            )]
+          });
+          return true;
+        }
+        if (id === "eb_sp_adult_no") { await interaction.update({ content: "İptal edildi.", components: [] }); return true; }
+        if (!me || role.position >= me.roles.highest.position) { await deny(interaction, "❌ Rolü veremiyorum. Bot rolünü +18 rolünün üzerine taşı."); return true; }
+        if (id === "eb_sp_adult_yes") {
+          await interaction.member.roles.add(role, "+18 doğrulama (kendi beyanı)");
+          await interaction.update({ content: "✅ +18 erişimin açıldı.", components: [] });
+          await sendLog(interaction.guild, `🔞 ${interaction.user} +18 erişimi aldı.`);
+          return true;
+        }
+        if (id === "eb_sp_adult_leave") {
+          if (!interaction.member.roles.cache.has(role.id)) { await deny(interaction, "ℹ️ Zaten +18 erişimin yok."); return true; }
+          await interaction.member.roles.remove(role, "+18 erişimi bırakıldı");
+          await respond(interaction, { content: "✅ +18 erişimin kaldırıldı.", ephemeral: true });
+          return true;
+        }
+      }
+      return false;
+    }
+
+    if (interaction.isModalSubmit()) {
+      if (id === "eb_sp_apply_modal") {
+        const err = spApplicationGuard(interaction, config);
+        if (err) { await deny(interaction, err); return true; }
+        const f = k => interaction.fields.getTextInputValue(k).trim();
+        const link = f("link");
+        if (!/^https?:\/\/\S+$/i.test(link)) { await deny(interaction, "❌ Kanal linki `https://` ile başlamalı."); return true; }
+        const ch = await interaction.guild.channels.fetch(sp.applications.channelId).catch(() => null);
+        if (!ch?.isTextBased()) { await deny(interaction, "❌ Başvuru kanalı bulunamadı. Yetkililer `/streamer-basvuru-ayarla` kullansın."); return true; }
+        await interaction.deferReply({ ephemeral: true });
+        sp.applications.counter += 1;
+        const no = sp.applications.counter;
+        const embed = new EmbedBuilder().setColor(0xfee75c).setTitle(`🎥 Streamer Başvurusu #${no}`)
+          .setThumbnail(interaction.user.displayAvatarURL())
+          .addFields(
+            { name: "👤 Kullanıcı", value: `${interaction.user} (${interaction.user.tag})`, inline: false },
+            { name: "📺 Platform", value: f("platform").slice(0, 100), inline: true },
+            { name: "🎬 İçerik", value: f("content").slice(0, 200), inline: true },
+            { name: "🔗 Link", value: link.slice(0, 300), inline: false },
+            { name: "📝 Hakkında", value: f("about").slice(0, 900), inline: false }
+          ).setTimestamp().setFooter({ text: BRAND_FOOTER });
+        const msg = await ch.send({
+          embeds: [embed],
+          components: [new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`eb_sp_ok:${interaction.user.id}`).setLabel("Onayla").setEmoji("✅").setStyle(ButtonStyle.Success),
+            new ButtonBuilder().setCustomId(`eb_sp_no:${interaction.user.id}`).setLabel("Reddet").setEmoji("❌").setStyle(ButtonStyle.Danger)
+          )]
+        });
+        sp.applications.records[interaction.user.id] = { no, status: "pending", at: Date.now(), messageId: msg.id };
+        saveServerConfig(interaction.guildId, config);
+        await interaction.editReply({ content: `✅ Başvurun alındı (#${no}). Sonuç sana DM ile bildirilecek.` });
+        await sendLog(interaction.guild, `🎥 ${interaction.user} streamer başvurusu yaptı (#${no}).`);
+        return true;
+      }
+
+      if (id.startsWith("eb_sp_no_modal:")) {
+        const uid = id.split(":")[1];
+        if (!spCanReview(interaction, config)) { await deny(interaction, "❌ Başvuruları değerlendirme yetkin yok."); return true; }
+        const rec = sp.applications.records[uid];
+        if (!rec || rec.status !== "pending") { await deny(interaction, "ℹ️ Bu başvuru zaten sonuçlanmış."); return true; }
+        const reason = interaction.fields.getTextInputValue("reason").trim();
+        rec.status = "rejected"; rec.by = interaction.user.id; rec.at = Date.now();
+        saveServerConfig(interaction.guildId, config);
+        if (interaction.isFromMessage() && interaction.message.embeds[0]) {
+          const embed = EmbedBuilder.from(interaction.message.embeds[0]).setColor(0xed4245)
+            .addFields({ name: "❌ Karar", value: `Reddedildi • ${interaction.user}${reason ? `\nSebep: ${reason}` : ""}`, inline: false });
+          await interaction.update({ embeds: [embed], components: [] });
+        } else {
+          await respond(interaction, { content: "✅ Başvuru reddedildi.", ephemeral: true });
+        }
+        await spDm(uid, `❌ **${interaction.guild.name}** sunucusundaki Streamer başvurun reddedildi.${reason ? `\nSebep: ${reason}` : ""}`);
+        await sendLog(interaction.guild, `🎥 ${interaction.user} <@${uid}> kullanıcısının streamer başvurusunu reddetti.`);
+        return true;
+      }
+    }
+    return false;
+  } catch (error) {
+    console.error("STREAMER+ ERROR:", error);
+    await deny(interaction, FAIL_TEXT).catch(() => {});
+    return true;
+  }
+}
+
+// ---------- Komut kayıtları ----------
+
+function spBuildCmd(name, desc, { stream, adult }) {
+  const b = new SlashCommandBuilder().setName(name).setDescription(desc)
+    .setDefaultMemberPermissions(F.Administrator).setDMPermission(false)
+    .addIntegerOption(o => o.setName("ses").setDescription("Genel ses kanalı sayısı (1-25, varsayılan 4)").setMinValue(1).setMaxValue(25));
+  if (stream) b.addIntegerOption(o => o.setName("yayin_ses").setDescription("Yayın odası sayısı (0-10, varsayılan 2)").setMinValue(0).setMaxValue(10));
+  if (adult) b.addIntegerOption(o => o.setName("ses_18").setDescription("+18 ses kanalı sayısı (0-10, varsayılan 2)").setMinValue(0).setMaxValue(10));
+  b.addBooleanOption(o => o.setName("emoji").setDescription("Kanal isimlerinde emoji kullanılsın mı? (varsayılan evet)"))
+    .addStringOption(o => o.setName("kategori_stili").setDescription("Kategori isim stili").addChoices(
+      { name: "Emoji (📌 BİLGİ)", value: "emoji" },
+      { name: "Köşeli (「 BİLGİ 」)", value: "brackets" },
+      { name: "Çizgili (━━ BİLGİ ━━)", value: "lines" },
+      { name: "Sade (BİLGİ)", value: "plain" }
+    ));
+  if (stream) b.addBooleanOption(o => o.setName("basvuru").setDescription("Streamer başvuru sistemi kurulsun mu? (varsayılan evet)"));
+  return b;
+}
+
+commands.push(
+  spBuildCmd("streamer-kur", "Streamer sunucusunu kur (başvuru sistemi + ses kanalı sayısı seçilebilir)", { stream: true, adult: false }),
+  spBuildCmd("streamer-kur-18", "+18 Streamer sunucusunu kur (yaş doğrulamalı +18 alanı ile)", { stream: true, adult: true }),
+  spBuildCmd("public-kur", "Public topluluk sunucusunu kur (ses kanalı sayısı seçilebilir)", { stream: false, adult: false }),
+  spBuildCmd("public-kur-18", "+18 Public sunucuyu kur (yaş doğrulamalı +18 alanı ile)", { stream: false, adult: true }),
+  new SlashCommandBuilder().setName("streamer-basvuru-panel").setDescription("Streamer başvuru panelini gönder (form + onay sistemi)")
+    .setDefaultMemberPermissions(F.ManageGuild).setDMPermission(false)
+    .addChannelOption(o => o.setName("kanal").setDescription("Panelin gönderileceği kanal").addChannelTypes(ChannelType.GuildText)),
+  new SlashCommandBuilder().setName("streamer-basvuru-ayarla").setDescription("Streamer başvuru ayarları")
+    .setDefaultMemberPermissions(F.ManageGuild).setDMPermission(false)
+    .addChannelOption(o => o.setName("kanal").setDescription("Başvuruların düşeceği kanal").addChannelTypes(ChannelType.GuildText))
+    .addRoleOption(o => o.setName("yetkili_rol").setDescription("Başvuruları değerlendirebilecek rol"))
+    .addRoleOption(o => o.setName("streamer_rol").setDescription("Onaylananlara verilecek rol"))
+    .addIntegerOption(o => o.setName("bekleme").setDescription("Red sonrası yeniden başvuru bekleme (dakika)").setMinValue(0).setMaxValue(10080))
+    .addBooleanOption(o => o.setName("aktif").setDescription("Başvurular açık mı?")),
+  new SlashCommandBuilder().setName("yas-panel").setDescription("+18 yaş doğrulama panelini gönder")
+    .setDefaultMemberPermissions(F.ManageGuild).setDMPermission(false)
+    .addChannelOption(o => o.setName("kanal").setDescription("Panelin gönderileceği kanal").addChannelTypes(ChannelType.GuildText))
+    .addRoleOption(o => o.setName("rol").setDescription("Verilecek +18 rolü (boşsa 🔞 18+ oluşturulur)")),
+  new SlashCommandBuilder().setName("kurulum-sil").setDescription("Kur komutlarıyla oluşturulan kanalları sil (roller kalır)")
+    .setDefaultMemberPermissions(F.Administrator).setDMPermission(false)
+    .addStringOption(o => o.setName("tur").setDescription("Silinecek kurulum").setRequired(true).addChoices(
+      { name: "Streamer", value: "streamer" }, { name: "Streamer +18", value: "streamer-18" },
+      { name: "Public", value: "public" }, { name: "Public +18", value: "public-18" }
+    ))
+    .addBooleanOption(o => o.setName("onay").setDescription("Silmeyi onaylıyorum").setRequired(true))
+);
+
+HELP_CATEGORIES.push({
+  key: "streamerplus", label: "Streamer & +18", emoji: "🎥",
+  cmds: ["streamer-kur", "streamer-kur-18", "public-kur", "public-kur-18", "streamer-basvuru-panel", "streamer-basvuru-ayarla", "yas-panel", "kurulum-sil"]
+});
+
+
+// ======================================================
+// AŞAMA 18: YAYIN DUYURU + STREAMER PROFİL + BİLDİRİM ROLÜ
+// ======================================================
+// Komutlar: /yayin-duyur, /yayin-ayarla, /yayin-bildirim-panel,
+//           /streamer-profil (ayarla|goster|sil), /streamer-liste, /kurulum-durum
+// customId: eb_sp_notify
+
+const SP_NOTIFY_ROLE_NAME = "🔔 Yayın Bildirim";
+const spAnnounceLast = new Map();
+
+function spNotifyPanel() {
+  return {
+    embeds: [new EmbedBuilder().setColor(0x9146ff).setTitle("🔔 ・ Yayın Bildirimleri")
+      .setDescription("Yayıncılar canlı yayına çıktığında haberdar olmak için butona bas.\nTekrar basarsan bildirimleri kapatırsın.")
+      .setFooter({ text: BRAND_FOOTER })],
+    components: [new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId("eb_sp_notify").setLabel("Bildirimi Aç / Kapat").setEmoji("🔔").setStyle(ButtonStyle.Primary)
+    )]
+  };
+}
+
+async function spGetNotifyRole(guild, config, create) {
+  const sp = spCfg(config);
+  let role = sp.notifyRoleId ? (guild.roles.cache.get(sp.notifyRoleId) || await guild.roles.fetch(sp.notifyRoleId).catch(() => null)) : null;
+  if (!role) role = guild.roles.cache.find(r => r.name === SP_NOTIFY_ROLE_NAME && !r.managed) || null;
+  if (!role && create) {
+    role = await guild.roles.create({ name: SP_NOTIFY_ROLE_NAME, color: 0x9146ff, mentionable: false, reason: "Endless Builder" });
+    config.createdIds ??= { categories: [], channels: [], roles: [] };
+    config.createdIds.roles.push(role.id);
+  }
+  if (role) sp.notifyRoleId = role.id;
+  return role;
+}
+
+async function handleStreamerExtras(interaction, config) {
+  try {
+    const sp = spCfg(config);
+    const guild = interaction.guild;
+
+    if (interaction.isChatInputCommand()) {
+      const n = interaction.commandName;
+
+      if (n === "yayin-ayarla") {
+        if (!canManageGuild(interaction)) { await deny(interaction, "❌ Bu komut için **Sunucuyu Yönet** yetkisi gerekir."); return true; }
+        const o = interaction.options, a = sp.announce;
+        const ch = o.getChannel("kanal"), role = o.getRole("bildirim_rol"), cd = o.getInteger("bekleme");
+        if (ch) a.channelId = ch.id;
+        if (role) sp.notifyRoleId = role.id;
+        if (cd !== null) a.cooldownMin = cd;
+        saveServerConfig(interaction.guildId, config);
+        await respond(interaction, { embeds: [new EmbedBuilder().setColor(0x9146ff).setTitle("📺 Yayın Duyuru Ayarları").addFields(
+          { name: "Duyuru kanalı", value: a.channelId ? `<#${a.channelId}>` : "—", inline: true },
+          { name: "Bildirim rolü", value: sp.notifyRoleId ? `<@&${sp.notifyRoleId}>` : "—", inline: true },
+          { name: "Bekleme", value: `${a.cooldownMin} dk`, inline: true }
+        ).setFooter({ text: BRAND_FOOTER })], ephemeral: true });
+        return true;
+      }
+
+      if (n === "yayin-bildirim-panel") {
+        if (!canManageGuild(interaction)) { await deny(interaction, "❌ Bu komut için **Sunucuyu Yönet** yetkisi gerekir."); return true; }
+        const lack = botLacks(interaction, F.ManageRoles, "Rolleri Yönet");
+        if (lack) { await deny(interaction, lack); return true; }
+        await interaction.deferReply({ ephemeral: true });
+        const role = await spGetNotifyRole(guild, config, true);
+        const ch = interaction.options.getChannel("kanal") || interaction.channel;
+        await ch.send(spNotifyPanel());
+        saveServerConfig(interaction.guildId, config);
+        await interaction.editReply({ content: `✅ Bildirim paneli ${ch} kanalına gönderildi. Rol: ${role}` });
+        return true;
+      }
+
+      if (n === "yayin-duyur") {
+        if (!config.toggles.streamer) { await deny(interaction, "❌ Streamer sistemi bu sunucuda kapalı."); return true; }
+        const role = spStreamerRole(guild, config);
+        const allowed = canManageGuild(interaction) || (role && interaction.member.roles.cache.has(role.id));
+        if (!allowed) { await deny(interaction, "❌ Yayın duyurusu için **Streamer** rolüne sahip olmalısın."); return true; }
+        const a = sp.announce;
+        if (!a.channelId) { await deny(interaction, "❌ Duyuru kanalı ayarlı değil. Yetkililer `/yayin-ayarla kanal:` kullansın."); return true; }
+        const key = `${guild.id}:${interaction.user.id}`;
+        const last = Math.max(spAnnounceLast.get(key) || 0, a.last[interaction.user.id] || 0);
+        const left = last + a.cooldownMin * 60000 - Date.now();
+        if (left > 0 && !canManageGuild(interaction)) { await deny(interaction, `⏳ Yeni duyuru için **${Math.ceil(left / 60000)} dk** beklemelisin.`); return true; }
+        const link = interaction.options.getString("link", true).trim();
+        if (!/^https?:\/\/\S+$/i.test(link)) { await deny(interaction, "❌ Link `https://` ile başlamalı."); return true; }
+        const ch = await guild.channels.fetch(a.channelId).catch(() => null);
+        if (!ch?.isTextBased()) { await deny(interaction, "❌ Duyuru kanalı bulunamadı."); return true; }
+        await interaction.deferReply({ ephemeral: true });
+        const prof = sp.profiles[interaction.user.id];
+        const title = interaction.options.getString("baslik") || "Canlı yayında!";
+        const game = interaction.options.getString("oyun");
+        const embed = new EmbedBuilder().setColor(0x9146ff)
+          .setAuthor({ name: interaction.member.displayName, iconURL: interaction.user.displayAvatarURL() })
+          .setTitle(`🔴 ${title}`.slice(0, 250)).setURL(link)
+          .setDescription(`${interaction.user} şimdi yayında!\n[▶️ Yayına git](${link})`)
+          .setTimestamp().setFooter({ text: BRAND_FOOTER });
+        if (game) embed.addFields({ name: "🎮 İçerik", value: game.slice(0, 200), inline: true });
+        if (prof?.platform) embed.addFields({ name: "📺 Platform", value: prof.platform.slice(0, 100), inline: true });
+        const ping = sp.notifyRoleId ? guild.roles.cache.get(sp.notifyRoleId) : null;
+        await ch.send({
+          content: ping ? `${ping}` : undefined, embeds: [embed],
+          allowedMentions: { roles: ping ? [ping.id] : [], users: [] }
+        });
+        spAnnounceLast.set(key, Date.now());
+        a.last[interaction.user.id] = Date.now();
+        saveServerConfig(interaction.guildId, config);
+        await interaction.editReply({ content: `✅ Duyuru ${ch} kanalına gönderildi.` });
+        await sendLog(guild, `📺 ${interaction.user} yayın duyurusu yaptı.`);
+        return true;
+      }
+
+      if (n === "streamer-profil") {
+        const sub = interaction.options.getSubcommand();
+        if (sub === "ayarla") {
+          const role = spStreamerRole(guild, config);
+          if (!(role && interaction.member.roles.cache.has(role.id)) && !canManageGuild(interaction)) { await deny(interaction, "❌ Profil için **Streamer** rolüne sahip olmalısın."); return true; }
+          const link = interaction.options.getString("link", true).trim();
+          if (!/^https?:\/\/\S+$/i.test(link)) { await deny(interaction, "❌ Link `https://` ile başlamalı."); return true; }
+          sp.profiles[interaction.user.id] = {
+            platform: interaction.options.getString("platform", true).slice(0, 50), link: link.slice(0, 300),
+            bio: (interaction.options.getString("hakkinda") || "").slice(0, 300), at: Date.now()
+          };
+          saveServerConfig(interaction.guildId, config);
+          await respond(interaction, { content: "✅ Streamer profilin kaydedildi. `/streamer-profil goster` ile görebilirsin.", ephemeral: true });
+          return true;
+        }
+        if (sub === "sil") {
+          delete sp.profiles[interaction.user.id];
+          saveServerConfig(interaction.guildId, config);
+          await respond(interaction, { content: "🗑️ Profilin silindi.", ephemeral: true });
+          return true;
+        }
+        const user = interaction.options.getUser("kullanici") || interaction.user;
+        const p = sp.profiles[user.id];
+        if (!p) { await deny(interaction, "ℹ️ Bu kullanıcının streamer profili yok."); return true; }
+        await respond(interaction, { embeds: [new EmbedBuilder().setColor(0x9146ff).setTitle(`🎥 ${user.username} • Streamer Profili`)
+          .setThumbnail(user.displayAvatarURL())
+          .addFields(
+            { name: "📺 Platform", value: p.platform, inline: true },
+            { name: "🔗 Kanal", value: `[Yayına git](${p.link})`, inline: true },
+            ...(p.bio ? [{ name: "📝 Hakkında", value: p.bio, inline: false }] : [])
+          ).setFooter({ text: BRAND_FOOTER })] });
+        return true;
+      }
+
+      if (n === "streamer-liste") {
+        const role = spStreamerRole(guild, config);
+        const list = Object.entries(sp.profiles).filter(([uid]) => !role || role.members.has(uid) || !guild.members.cache.has(uid)).slice(0, 25);
+        if (!list.length) { await deny(interaction, "ℹ️ Kayıtlı streamer profili yok."); return true; }
+        await respond(interaction, { embeds: [new EmbedBuilder().setColor(0x9146ff).setTitle("🎥 Streamer Listesi")
+          .setDescription(list.map(([uid, p]) => `<@${uid}> • ${p.platform} • [Kanal](${p.link})`).join("\n").slice(0, 4000))
+          .setFooter({ text: BRAND_FOOTER })], allowedMentions: { parse: [] } });
+        return true;
+      }
+
+      if (n === "kurulum-durum") {
+        if (!canManageGuild(interaction)) { await deny(interaction, "❌ Bu komut için **Sunucuyu Yönet** yetkisi gerekir."); return true; }
+        const names = { streamer: "Streamer", "streamer-18": "Streamer +18", public: "Public", "public-18": "Public +18" };
+        const lines = Object.entries(sp.builds).map(([k, r]) => `✅ **${names[k] || k}** • ${r.categories.length} kategori, ${r.channels.length} kanal • <t:${Math.floor(r.at / 1000)}:R>`);
+        await respond(interaction, { embeds: [new EmbedBuilder().setColor(0x5865f2).setTitle("🛠️ Kur Komutları Durumu")
+          .setDescription(lines.join("\n") || "Henüz `/streamer-kur` veya `/public-kur` kullanılmadı.")
+          .addFields(
+            { name: "📝 Başvuru", value: sp.applications.enabled ? "🟢 Açık" : "🔴 Kapalı", inline: true },
+            { name: "📺 Duyuru kanalı", value: sp.announce.channelId ? `<#${sp.announce.channelId}>` : "—", inline: true },
+            { name: "🔞 +18 rolü", value: sp.adultRoleId ? `<@&${sp.adultRoleId}>` : "—", inline: true }
+          ).setFooter({ text: BRAND_FOOTER })], ephemeral: true });
+        return true;
+      }
+      return false;
+    }
+
+    if (interaction.isButton() && interaction.customId === "eb_sp_notify") {
+      if (!config.toggles.streamer) { await deny(interaction, "❌ Streamer sistemi bu sunucuda kapalı."); return true; }
+      const role = await spGetNotifyRole(guild, config, false);
+      if (!role) { await deny(interaction, "❌ Bildirim rolü bulunamadı. Yetkililer `/yayin-bildirim-panel` kullansın."); return true; }
+      const me = guild.members.me;
+      if (!me || role.position >= me.roles.highest.position) { await deny(interaction, "❌ Rolü veremiyorum. Bot rolünü bildirim rolünün üzerine taşı."); return true; }
+      if (interaction.member.roles.cache.has(role.id)) {
+        await interaction.member.roles.remove(role, "Yayın bildirimi kapatıldı");
+        await respond(interaction, { content: "🔕 Yayın bildirimlerini kapattın.", ephemeral: true });
+      } else {
+        await interaction.member.roles.add(role, "Yayın bildirimi açıldı");
+        await respond(interaction, { content: "🔔 Yayın bildirimlerini açtın!", ephemeral: true });
+      }
+      return true;
+    }
+    return false;
+  } catch (error) {
+    console.error("STREAMER EXTRAS ERROR:", error);
+    await deny(interaction, FAIL_TEXT).catch(() => {});
+    return true;
+  }
+}
+
+commands.push(
+  new SlashCommandBuilder().setName("yayin-duyur").setDescription("Canlı yayın duyurusu gönder (Streamer rolü gerekir)").setDMPermission(false)
+    .addStringOption(o => o.setName("link").setDescription("Yayın linki (https://...)").setRequired(true).setMaxLength(300))
+    .addStringOption(o => o.setName("baslik").setDescription("Yayın başlığı").setMaxLength(100))
+    .addStringOption(o => o.setName("oyun").setDescription("Oyun / içerik").setMaxLength(100)),
+  new SlashCommandBuilder().setName("yayin-ayarla").setDescription("Yayın duyuru kanalı, bildirim rolü ve bekleme süresi")
+    .setDefaultMemberPermissions(F.ManageGuild).setDMPermission(false)
+    .addChannelOption(o => o.setName("kanal").setDescription("Duyuruların gideceği kanal").addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement))
+    .addRoleOption(o => o.setName("bildirim_rol").setDescription("Duyuruda etiketlenecek rol"))
+    .addIntegerOption(o => o.setName("bekleme").setDescription("İki duyuru arası bekleme (dakika)").setMinValue(0).setMaxValue(1440)),
+  new SlashCommandBuilder().setName("yayin-bildirim-panel").setDescription("Yayın bildirim rolü butonlu paneli gönder")
+    .setDefaultMemberPermissions(F.ManageGuild).setDMPermission(false)
+    .addChannelOption(o => o.setName("kanal").setDescription("Panelin gönderileceği kanal").addChannelTypes(ChannelType.GuildText)),
+  new SlashCommandBuilder().setName("streamer-profil").setDescription("Streamer profil kartı").setDMPermission(false)
+    .addSubcommand(s => s.setName("ayarla").setDescription("Kendi streamer profilini oluştur")
+      .addStringOption(o => o.setName("platform").setDescription("Twitch, YouTube, Kick...").setRequired(true).setMaxLength(50))
+      .addStringOption(o => o.setName("link").setDescription("Kanal linki (https://...)").setRequired(true).setMaxLength(300))
+      .addStringOption(o => o.setName("hakkinda").setDescription("Kısa tanıtım").setMaxLength(300)))
+    .addSubcommand(s => s.setName("goster").setDescription("Bir streamer'ın profilini göster")
+      .addUserOption(o => o.setName("kullanici").setDescription("Kullanıcı (boşsa sen)")))
+    .addSubcommand(s => s.setName("sil").setDescription("Kendi profilini sil")),
+  new SlashCommandBuilder().setName("streamer-liste").setDescription("Sunucudaki streamer profillerini listele").setDMPermission(false),
+  new SlashCommandBuilder().setName("kurulum-durum").setDescription("Kur komutlarının durumunu göster")
+    .setDefaultMemberPermissions(F.ManageGuild).setDMPermission(false)
+);
+
+HELP_CATEGORIES.find(c => c.key === "streamerplus").cmds.push(
+  "yayin-duyur", "yayin-ayarla", "yayin-bildirim-panel", "streamer-profil", "streamer-liste", "kurulum-durum"
+);
+
+
 async function handleExtraInteraction(interaction) {
   if (!interaction.guild) {
     if (interaction.isRepliable?.() && !interaction.replied && !interaction.deferred) {
@@ -6118,6 +6989,9 @@ async function handleExtraInteraction(interaction) {
   }
 
   const config = ensureExtraConfig(getServerConfig(interaction.guildId));
+
+  if (await handleStreamerPlus(interaction, config)) return true;
+  if (await handleStreamerExtras(interaction, config)) return true;
 
   if (interaction.isChatInputCommand()) {
     const n = interaction.commandName;
