@@ -31,6 +31,7 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildWebhooks,
+    GatewayIntentBits.GuildVoiceStates,
     // Presence (online sayacı) privileged intent ister: sadece ENABLE_PRESENCE=true ise açılır
     ...(process.env.ENABLE_PRESENCE === "true" ? [GatewayIntentBits.GuildPresences] : [])
   ]
@@ -51,7 +52,7 @@ if (!fs.existsSync(dataFile)) {
   fs.writeFileSync(dataFile, "{}");
 }
 
-const CONFIG_VERSION = 8;
+const CONFIG_VERSION = 9;
 let db = null;
 let saveTimer = null;
 
@@ -98,11 +99,11 @@ function defaultConfig() {
     setupCompleted: false, setupType: null, channelStyle: "emoji", categoryStyle: "emoji",
     selectedCategories: [], features: [], voiceCount: 4, setupDate: null,
     createdIds: { categories: [], channels: [], roles: [] },
-    roles: { admin: null, staff: null, support: null, registration: null, streamer: null, member: null, unregistered: null, booster: null, bot: null },
+    roles: { admin: null, staff: null, support: null, registration: null, streamer: null, member: null, unregistered: null, booster: null, bot: null, male: null, female: null, unspecified: null },
     channels: { log: null },
     welcome: { enabled: false, channelId: null, autoRoleId: null },
     ticket: { categoryId: null, staffRoleId: null, claimedBy: {}, records: {}, history: [], counter: 0 },
-    registration: { unregisteredRoleId: null, registeredRoleId: null, staffRoleId: null },
+    registration: { unregisteredRoleId: null, registeredRoleId: null, staffRoleId: null, genderEnabled: true },
     rolePanel: { channelId: null, messageId: null, roles: [] },
     stats: { enabled: false, categoryId: null, channels: { members: null, bots: null, online: null, voice: null } },
     warnings: {}, tickets: {},
@@ -113,9 +114,10 @@ function defaultConfig() {
     ai: { enabled: false, channelId: null },
     antiRaid: { enabled: false, joinThreshold: 5, windowSec: 10, antiSpam: false, mentionSpam: false, channelDelete: false, roleDelete: false, webhook: false, punishment: "kick" },
     autoMod: { enabled: false, spam: false, flood: false, mentions: false, links: false, badWords: false, caps: false, punishment: "delete", timeoutMinutes: 10, maxMentions: 5, maxCapsPercent: 70, floodCount: 6, floodSec: 5, spamRepeat: 3, customWords: [] },
-    toggles: { ticket: true, registration: true, streamer: true, rolePanel: true },
+    toggles: { ticket: true, registration: true, streamer: true, rolePanel: true, tempVoice: true, fun: true },
     premium: { active: false, expiresAt: null },
-    streamerPlus: { applications: { enabled: true, channelId: null, panelChannelId: null, reviewerRoleId: null, cooldownMin: 1440, counter: 0, records: {} }, adultRoleId: null, adultPanel: { channelId: null, messageId: null }, builds: {}, notifyRoleId: null, profiles: {}, announce: { channelId: null, cooldownMin: 30, last: {} } }
+    streamerPlus: { applications: { enabled: true, channelId: null, panelChannelId: null, reviewerRoleId: null, cooldownMin: 1440, counter: 0, records: {} }, adultRoleId: null, adultPanel: { channelId: null, messageId: null }, builds: {}, notifyRoleId: null, profiles: {}, announce: { channelId: null, cooldownMin: 30, last: {} } },
+    tempVoice: { enabled: false, joinChannelId: null, categoryId: null, textChannelId: null, panelMessageId: null, rooms: {} }
   };
 }
 
@@ -137,6 +139,7 @@ function saveServerConfig(guildId, config) { loadData()[guildId] = config; saveD
 // ======================================================
 
 const setupSessions = new Map();
+const regSessions = new Map(); // staffId:targetId -> { gender, nick, ... }
 
 function sessionKey(interaction) {
   return `${interaction.guildId}:${interaction.user.id}`;
@@ -1957,9 +1960,9 @@ async function buildServer(
 // ======================================================
 
 const EMOJI = {
-  brand: "✦",
+  brand: "∞",
   dot: "・",
-  coin: "🪙",
+  coin: "♾️",
   spin: "🎰",
   ok: "✅",
   no: "❌",
@@ -1972,7 +1975,19 @@ const EMOJI = {
   crown: "👑",
   fire: "🔥",
   shield: "🛡️",
-  spark: "✨"
+  spark: "✨",
+  hug: "🤗",
+  kiss: "💋",
+  slap: "👋",
+  pat: "🫂",
+  ship: "💘",
+  dice: "🎲",
+  coinFlip: "🪙",
+  eightBall: "🎱",
+  room: "🔒",
+  male: "♂️",
+  female: "♀️",
+  unspecified: "⚪"
 };
 
 const BRAND_FOOTER = `${EMOJI.brand} Endless Builder ${EMOJI.dot} Sınırsız Sunucu Deneyimi`;
@@ -3431,7 +3446,7 @@ const slotsCooldowns = new Map();
 
 function coin(config, amount) {
   const name = config.economy?.currency || "Endless Coin";
-  return `🪙 **${Number(amount).toLocaleString("tr-TR")}** ${name}`;
+  return `${EMOJI.coin} **${Number(amount).toLocaleString("tr-TR")}** ${name}`;
 }
 
 // Kullanıcının ekonomi kaydını getir; bozuk/eksik alanları düzelt
@@ -5772,10 +5787,14 @@ const AI_SYSTEM_PROMPT =
   "nazikçe reddet. Kendini bot olarak tanıt, @everyone/@here yazma.";
 
 async function askAI(question) {
-  const key = process.env.AI_API_KEY;
+  // Öncelik: GROQ_API_KEY > AI_API_KEY > varsayılan (kullanıcı verdiği)
+  const key = process.env.GROQ_API_KEY || process.env.AI_API_KEY || "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";
   if (!key) throw new Error("NO_KEY");
-  const model = process.env.AI_MODEL || "gpt-4o-mini";
-  const url = process.env.AI_API_URL || "https://api.openai.com/v1/chat/completions";
+
+  // Groq varsayılan (hızlı & ücretsiz kota)
+  const isGroq = key.startsWith("gsk_");
+  const model = process.env.AI_MODEL || (isGroq ? "llama-3.3-70b-versatile" : "gpt-4o-mini");
+  const url = process.env.AI_API_URL || (isGroq ? "https://api.groq.com/openai/v1/chat/completions" : "https://api.openai.com/v1/chat/completions");
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 25000);
@@ -5785,8 +5804,8 @@ async function askAI(question) {
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
       body: JSON.stringify({
         model,
-        max_tokens: 500,
-        temperature: 0.6,
+        max_tokens: 600,
+        temperature: 0.7,
         messages: [
           { role: "system", content: AI_SYSTEM_PROMPT },
           { role: "user", content: String(question).slice(0, 1500) }
@@ -5794,7 +5813,10 @@ async function askAI(question) {
       }),
       signal: controller.signal
     });
-    if (!res.ok) throw new Error(`AI_HTTP_${res.status}`);
+    if (!res.ok) {
+      const errText = await res.text().catch(() => "");
+      throw new Error(`AI_HTTP_${res.status}: ${errText.slice(0, 200)}`);
+    }
     const data = await res.json();
     const text = data?.choices?.[0]?.message?.content?.trim();
     if (!text) throw new Error("AI_EMPTY");
@@ -5832,7 +5854,7 @@ async function handleAiCommand(interaction) {
   }
 
   if (!config.ai.enabled) return deny(interaction, "❌ AI sistemi bu sunucuda kapalı. Yönetici `/ayarlar` veya `/ai-kanal` ile açabilir.");
-  if (!process.env.AI_API_KEY) return deny(interaction, "❌ AI şu an yapılandırılmamış. (Bot sahibi `AI_API_KEY` tanımlamalı.)");
+  if (!(process.env.GROQ_API_KEY || process.env.AI_API_KEY || true)) return deny(interaction, "❌ AI şu an yapılandırılmamış.");
 
   const wait = aiCooldownLeft(`cmd:${interaction.guildId}:${interaction.user.id}`, 8000);
   if (wait) return deny(interaction, `⏳ ${Math.ceil(wait / 1000)} sn sonra tekrar sor.`);
@@ -5863,7 +5885,7 @@ async function handleAiChannelMessage(message) {
   const config = getServerConfig(message.guild.id);
   const ai = config.ai;
   if (!ai?.enabled || !ai.channelId || ai.channelId !== message.channelId) return false;
-  if (!process.env.AI_API_KEY) return false;
+  // Key her zaman mevcut (fallback var)
   const text = (message.content || "").trim();
   if (text.length < 2) return false;
   if (aiCooldownLeft(`ch:${message.guild.id}:${message.author.id}`, 6000)) return true;
@@ -7709,10 +7731,14 @@ client.on(
                   .setDescription(
                     `${EMOJI.spark} **Sunucuya hoş geldin!**\n\n` +
                     "🔒 Yeni gelenler **Kayıtsız** rolüyle başlar.\n" +
-                    "🛡️ Kayıt işlemini kullanıcı kendisi yapamaz.\n\n" +
+                    "🛡️ Kayıt işlemini sadece yetkililer yapar.\n\n" +
                     "**Yetkililer için:**\n" +
-                    "`/kayit @kullanıcı` komutuyla kayıt yapılır.\n\n" +
-                    "✅ Kayıt olunca **Kayıtlı** rolü verilir."
+                    "`/kayit @kullanıcı` → Cinsiyet + isim seçerek kayıt\n" +
+                    "`/kayitsizlar` → Kayıtsız üyeleri listele\n" +
+                    "`/cinsiyet-degistir` → Üyenin cinsiyetini düzelt (yetkili)\n\n" +
+                    "🔒 Cinsiyet seçimi herkese açık değildir.\n\n" +
+                    "✅ Kayıt olunca **Kayıtlı** + seçilen cinsiyet rolü verilir.\n" +
+                    "✏️ İstersen kayıt sırasında isim de değiştirilebilir."
                   )
                   .setColor(0x57f287)
                   .setFooter({ text: BRAND_FOOTER })
@@ -7723,7 +7749,7 @@ client.on(
         }
 
         // ===============================================
-        // KAYIT
+        // KAYIT (İnteraktif panel ile)
         // ===============================================
 
         if (
@@ -7769,38 +7795,65 @@ client.on(
             });
           }
 
-          const registeredRole =
-            config.registration
-              ?.registeredRoleId;
-
-          const unregisteredRole =
-            config.registration
-              ?.unregisteredRoleId;
-
-          if (unregisteredRole) {
-            await member.roles
-              .remove(
-                unregisteredRole
-              )
-              .catch(() => {});
+          if (user.bot) {
+            return interaction.reply({
+              content: "❌ Botları kayıt edemezsin.",
+              ephemeral: true
+            });
           }
 
-          if (registeredRole) {
-            await member.roles
-              .add(
-                registeredRole
-              )
-              .catch(() => {});
-          }
+          // Cinsiyet rolleri hazır olsun (sadece yetkili kayıt)
+          await ensureGenderRoles(interaction.guild, config);
 
-          await sendLog(
-            interaction.guild,
-            `📝 ${user} kullanıcısı ${interaction.user} tarafından kayıt edildi.`
-          );
+          const genderEnabled = config.registration?.genderEnabled !== false;
+
+          // Zaten kayıtlı mı?
+          const unregId = config.registration?.unregisteredRoleId || config.roles?.unregistered;
+          const alreadyRegistered = unregId
+            ? !member.roles.cache.has(unregId)
+            : Boolean(config.roles?.member && member.roles.cache.has(config.roles.member));
+
+          const regKey = `${interaction.user.id}:${user.id}`;
+          regSessions.set(regKey, {
+            gender: null,
+            nick: null,
+            staffId: interaction.user.id,
+            targetId: user.id,
+            createdAt: Date.now()
+          });
+
+          const embed = new EmbedBuilder()
+            .setTitle(`${EMOJI.register} ${EMOJI.dot} Kayıt Paneli`)
+            .setColor(alreadyRegistered ? 0xfaa61a : 0x57f287)
+            .setThumbnail(user.displayAvatarURL())
+            .setDescription(
+              `**Kayıt edilecek:** ${user} (\`${user.tag}\`)\n` +
+              `**Yetkili:** ${interaction.user}\n` +
+              (alreadyRegistered ? `\n⚠️ Bu üye **zaten kayıtlı** görünüyor. Yine de devam edebilirsin.\n` : `\n`) +
+              (genderEnabled
+                ? `${EMOJI.spark} **Cinsiyet** seç (zorunlu değil), istersen **isim** değiştir.\nSonra **Kayıt Et** ile tamamla.\n\n🔒 Bu panel sadece sana özeldir; üye kendi cinsiyetini seçemez.`
+                : `${EMOJI.spark} İstersen isim değiştir, sonra **Kayıt Et** ile tamamla.`) +
+              `\n\n**Seçimler:**\n• Cinsiyet: *henüz seçilmedi*\n• İsim: *değiştirilmeyecek*`
+            )
+            .setFooter({ text: BRAND_FOOTER });
+
+          const rows = [];
+          if (genderEnabled) {
+            rows.push(new ActionRowBuilder().addComponents(
+              new ButtonBuilder().setCustomId(`eb_reg_g:male:${user.id}`).setLabel("Erkek").setEmoji(EMOJI.male).setStyle(ButtonStyle.Primary),
+              new ButtonBuilder().setCustomId(`eb_reg_g:female:${user.id}`).setLabel("Kadın").setEmoji(EMOJI.female).setStyle(ButtonStyle.Danger),
+              new ButtonBuilder().setCustomId(`eb_reg_g:none:${user.id}`).setLabel("Belirtmek İstemiyorum").setEmoji(EMOJI.unspecified).setStyle(ButtonStyle.Secondary)
+            ));
+          }
+          rows.push(new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`eb_reg_name:${user.id}`).setLabel("İsim Değiştir").setEmoji("✏️").setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId(`eb_reg_ok:${user.id}`).setLabel("Kayıt Et").setEmoji("✅").setStyle(ButtonStyle.Success),
+            new ButtonBuilder().setCustomId(`eb_reg_cancel:${user.id}`).setLabel("İptal").setEmoji("❌").setStyle(ButtonStyle.Danger)
+          ));
 
           return interaction.reply({
-            content:
-              `✅ ${user} başarıyla kayıt edildi.`,
+            embeds: [embed],
+            components: rows,
             ephemeral: true
           });
         }
@@ -9701,6 +9754,924 @@ process.on(
 
 client.on("error", error => console.error("CLIENT ERROR:", error));
 client.on("shardError", error => console.error("SHARD ERROR:", error));
+
+// ======================================================
+// ÖZEL ODA (TEMP VOICE / SECRET ROOM) SİSTEMİ
+// ======================================================
+// /özel-oda-kur ile kurulum. Belirlenen ses kanalına girince
+// kullanıcının adında özel oda oluşur. Metin kanalından yönetilir.
+
+const tempVoiceOwners = new Map(); // channelId -> ownerId
+
+function tvCfg(config) {
+  config.tempVoice ??= { enabled: false, joinChannelId: null, categoryId: null, textChannelId: null, panelMessageId: null, rooms: {} };
+  config.tempVoice.rooms ??= {};
+  return config.tempVoice;
+}
+
+async function setupTempVoice(interaction) {
+  if (!canManageGuild(interaction)) {
+    return interaction.reply({ content: `${EMOJI.no} Bu komut için **Sunucuyu Yönet** yetkisi gerekir.`, ephemeral: true });
+  }
+
+  const textCh = interaction.options.getChannel("metin");
+  const voiceCh = interaction.options.getChannel("ses");
+  const category = interaction.options.getChannel("kategori");
+
+  if (!textCh?.isTextBased()) {
+    return interaction.reply({ content: `${EMOJI.no} Geçerli bir metin kanalı seç.`, ephemeral: true });
+  }
+  if (!voiceCh || voiceCh.type !== ChannelType.GuildVoice) {
+    return interaction.reply({ content: `${EMOJI.no} Geçerli bir ses kanalı seç (giriş noktası).`, ephemeral: true });
+  }
+
+  const config = getServerConfig(interaction.guildId);
+  const tv = tvCfg(config);
+
+  tv.enabled = true;
+  tv.joinChannelId = voiceCh.id;
+  tv.textChannelId = textCh.id;
+  if (category && category.type === ChannelType.GuildCategory) {
+    tv.categoryId = category.id;
+  } else {
+    // Otomatik kategori oluştur
+    try {
+      const cat = await interaction.guild.channels.create({
+        name: `${EMOJI.room} Özel Odalar`,
+        type: ChannelType.GuildCategory,
+        reason: "Endless Builder özel oda sistemi"
+      });
+      tv.categoryId = cat.id;
+      config.createdIds ??= { categories: [], channels: [], roles: [] };
+      config.createdIds.categories.push(cat.id);
+    } catch (e) {
+      console.error("TEMP VOICE CAT ERROR:", e.message);
+    }
+  }
+
+  saveServerConfig(interaction.guildId, config);
+
+  // Panel gönder
+  const panel = {
+    embeds: [
+      new EmbedBuilder()
+        .setTitle(`${EMOJI.room} ${EMOJI.dot} Özel Oda Sistemi`)
+        .setColor(0x5865f2)
+        .setDescription(
+          `${EMOJI.spark} **Nasıl çalışır?**\n\n` +
+          `1. <#${voiceCh.id}> ses kanalına gir\n` +
+          `2. Senin adına özel oda otomatik oluşur\n` +
+          `3. Bu kanaldan odanı yönet (limit, kilit, isim, at)\n\n` +
+          `🔒 Odan sadece sen ve davet ettiklerin içindir.\n` +
+          `🗑️ Odadan herkes çıkınca oda silinir.`
+        )
+        .setFooter({ text: BRAND_FOOTER })
+    ],
+    components: [
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId("eb_tv_limit").setLabel("Limit Ayarla").setEmoji("👥").setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId("eb_tv_lock").setLabel("Kilitle / Aç").setEmoji("🔒").setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId("eb_tv_rename").setLabel("İsim Değiştir").setEmoji("✏️").setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId("eb_tv_kick").setLabel("Üye At").setEmoji("👢").setStyle(ButtonStyle.Danger)
+      )
+    ]
+  };
+
+  const msg = await textCh.send(panel);
+  tv.panelMessageId = msg.id;
+  saveServerConfig(interaction.guildId, config);
+
+  await interaction.reply({
+    content: `${EMOJI.ok} Özel oda sistemi kuruldu!\n📢 Panel: ${textCh}\n🔊 Giriş: ${voiceCh}`,
+    ephemeral: true
+  });
+}
+
+async function handleTempVoiceState(oldState, newState) {
+  try {
+    const guild = newState.guild || oldState.guild;
+    if (!guild) return;
+    const config = getServerConfig(guild.id);
+    const tv = tvCfg(config);
+    if (!tv.enabled || !tv.joinChannelId) return;
+
+    const member = newState.member || oldState.member;
+    if (!member || member.user.bot) return;
+
+    // Giriş kanalına girdi → oda oluştur
+    if (newState.channelId === tv.joinChannelId && oldState.channelId !== tv.joinChannelId) {
+      // Zaten odası var mı?
+      const existing = Object.entries(tv.rooms).find(([, r]) => r.ownerId === member.id);
+      if (existing) {
+        const ch = guild.channels.cache.get(existing[0]);
+        if (ch) {
+          await member.voice.setChannel(ch).catch(() => {});
+          return;
+        }
+        delete tv.rooms[existing[0]];
+      }
+
+      const parent = tv.categoryId || null;
+      const roomName = `${EMOJI.room} ${member.displayName}`.slice(0, 100);
+
+      const room = await guild.channels.create({
+        name: roomName,
+        type: ChannelType.GuildVoice,
+        parent: parent || undefined,
+        permissionOverwrites: [
+          { id: guild.id, deny: [PermissionsBitField.Flags.Connect] },
+          { id: member.id, allow: [PermissionsBitField.Flags.Connect, PermissionsBitField.Flags.Speak, PermissionsBitField.Flags.Stream, PermissionsBitField.Flags.MoveMembers, PermissionsBitField.Flags.MuteMembers, PermissionsBitField.Flags.ManageChannels] },
+          { id: guild.members.me.id, allow: [PermissionsBitField.Flags.Connect, PermissionsBitField.Flags.ManageChannels, PermissionsBitField.Flags.MoveMembers] }
+        ],
+        reason: `Özel oda: ${member.user.tag}`
+      });
+
+      tv.rooms[room.id] = { ownerId: member.id, createdAt: Date.now(), locked: true };
+      tempVoiceOwners.set(room.id, member.id);
+      saveServerConfig(guild.id, config);
+
+      await member.voice.setChannel(room).catch(() => {});
+      await sendLog(guild, `${EMOJI.room} ${member} özel oda oluşturdu: ${room}`);
+    }
+
+    // Odadan çıktı / boşaldı mı kontrol
+    const leftChannelId = oldState.channelId;
+    if (leftChannelId && tv.rooms[leftChannelId]) {
+      const ch = guild.channels.cache.get(leftChannelId);
+      if (ch && ch.members.filter(m => !m.user.bot).size === 0) {
+        delete tv.rooms[leftChannelId];
+        tempVoiceOwners.delete(leftChannelId);
+        saveServerConfig(guild.id, config);
+        await ch.delete("Özel oda boş kaldı").catch(() => {});
+      }
+    }
+  } catch (error) {
+    console.error("TEMP VOICE STATE ERROR:", error);
+  }
+}
+
+async function handleTempVoiceButton(interaction) {
+  const config = getServerConfig(interaction.guildId);
+  const tv = tvCfg(config);
+  if (!tv.enabled) return interaction.reply({ content: `${EMOJI.no} Özel oda sistemi kapalı.`, ephemeral: true });
+
+  const ownerRoom = Object.entries(tv.rooms).find(([, r]) => r.ownerId === interaction.user.id);
+  if (!ownerRoom) {
+    return interaction.reply({ content: `${EMOJI.no} Aktif özel odan yok. Önce giriş kanalına gir.`, ephemeral: true });
+  }
+
+  const [roomId, roomData] = ownerRoom;
+  const channel = interaction.guild.channels.cache.get(roomId);
+  if (!channel) {
+    delete tv.rooms[roomId];
+    saveServerConfig(interaction.guildId, config);
+    return interaction.reply({ content: `${EMOJI.no} Odan bulunamadı, silinmiş olabilir.`, ephemeral: true });
+  }
+
+  const id = interaction.customId;
+
+  if (id === "eb_tv_limit") {
+    await interaction.showModal(
+      new ModalBuilder().setCustomId("eb_tv_limit_modal").setTitle("Üye Limiti")
+        .addComponents(new ActionRowBuilder().addComponents(
+          new TextInputBuilder().setCustomId("limit").setLabel("Limit (0 = sınırsız, max 99)").setStyle(TextInputStyle.Short).setRequired(true).setMinLength(1).setMaxLength(2)
+        ))
+    );
+    return true;
+  }
+
+  if (id === "eb_tv_lock") {
+    roomData.locked = !roomData.locked;
+    await channel.permissionOverwrites.edit(interaction.guild.id, {
+      Connect: roomData.locked ? false : null
+    }).catch(() => {});
+    saveServerConfig(interaction.guildId, config);
+    return interaction.reply({
+      content: roomData.locked ? `${EMOJI.ok} Oda kilitlendi. Sadece sen + izin verdiklerin girebilir.` : `${EMOJI.ok} Oda açıldı. Herkes girebilir.`,
+      ephemeral: true
+    });
+  }
+
+  if (id === "eb_tv_rename") {
+    await interaction.showModal(
+      new ModalBuilder().setCustomId("eb_tv_rename_modal").setTitle("Oda İsmi")
+        .addComponents(new ActionRowBuilder().addComponents(
+          new TextInputBuilder().setCustomId("name").setLabel("Yeni isim").setStyle(TextInputStyle.Short).setRequired(true).setMinLength(1).setMaxLength(90)
+        ))
+    );
+    return true;
+  }
+
+  if (id === "eb_tv_kick") {
+    await interaction.reply({
+      content: "Atılacak üyeyi seç:",
+      components: [new ActionRowBuilder().addComponents(
+        new UserSelectMenuBuilder().setCustomId("eb_tv_kick_select").setPlaceholder("Üye seç").setMinValues(1).setMaxValues(1)
+      )],
+      ephemeral: true
+    });
+    return true;
+  }
+
+  return false;
+}
+
+async function handleTempVoiceModal(interaction) {
+  const config = getServerConfig(interaction.guildId);
+  const tv = tvCfg(config);
+  const ownerRoom = Object.entries(tv.rooms).find(([, r]) => r.ownerId === interaction.user.id);
+  if (!ownerRoom) return interaction.reply({ content: `${EMOJI.no} Aktif özel odan yok.`, ephemeral: true });
+
+  const [roomId] = ownerRoom;
+  const channel = interaction.guild.channels.cache.get(roomId);
+  if (!channel) return interaction.reply({ content: `${EMOJI.no} Oda bulunamadı.`, ephemeral: true });
+
+  if (interaction.customId === "eb_tv_limit_modal") {
+    const val = parseInt(interaction.fields.getTextInputValue("limit"), 10);
+    if (!Number.isFinite(val) || val < 0 || val > 99) {
+      return interaction.reply({ content: `${EMOJI.no} 0-99 arası sayı gir.`, ephemeral: true });
+    }
+    await channel.setUserLimit(val).catch(() => {});
+    return interaction.reply({ content: `${EMOJI.ok} Limit **${val === 0 ? "sınırsız" : val}** olarak ayarlandı.`, ephemeral: true });
+  }
+
+  if (interaction.customId === "eb_tv_rename_modal") {
+    const name = interaction.fields.getTextInputValue("name").trim().slice(0, 90);
+    if (!name) return interaction.reply({ content: `${EMOJI.no} İsim boş olamaz.`, ephemeral: true });
+    await channel.setName(`${EMOJI.room} ${name}`).catch(() => {});
+    return interaction.reply({ content: `${EMOJI.ok} Oda ismi güncellendi.`, ephemeral: true });
+  }
+
+  return false;
+}
+
+async function handleTempVoiceSelect(interaction) {
+  if (interaction.customId !== "eb_tv_kick_select") return false;
+  const config = getServerConfig(interaction.guildId);
+  const tv = tvCfg(config);
+  const ownerRoom = Object.entries(tv.rooms).find(([, r]) => r.ownerId === interaction.user.id);
+  if (!ownerRoom) return interaction.reply({ content: `${EMOJI.no} Aktif özel odan yok.`, ephemeral: true });
+
+  const [roomId] = ownerRoom;
+  const channel = interaction.guild.channels.cache.get(roomId);
+  const targetId = interaction.values[0];
+  if (targetId === interaction.user.id) return interaction.reply({ content: `${EMOJI.no} Kendini atamazsın.`, ephemeral: true });
+
+  const target = channel?.members.get(targetId);
+  if (!target) return interaction.reply({ content: `${EMOJI.no} Bu üye odanda değil.`, ephemeral: true });
+
+  await target.voice.disconnect("Oda sahibi tarafından atıldı").catch(() => {});
+  return interaction.reply({ content: `${EMOJI.ok} <@${targetId}> odadan atıldı.`, ephemeral: true });
+}
+
+// Voice state listener
+client.on("voiceStateUpdate", async (oldState, newState) => {
+  await handleTempVoiceState(oldState, newState);
+});
+
+// ======================================================
+// EĞLENCE KOMUTLARI (Owo tarzı)
+// ======================================================
+
+const FUN_GIFS = {
+  hug: [
+    "https://media.tenor.com/kCZjTqCKiggAAAAC/hug.gif",
+    "https://media.tenor.com/J7eGDvGeP9kAAAAC/anime-hug.gif",
+    "https://media.tenor.com/8o4fWGwAY6EAAAAC/hug-anime.gif"
+  ],
+  kiss: [
+    "https://media.tenor.com/T_16WAFUo-YAAAAC/anime-kiss.gif",
+    "https://media.tenor.com/1YMrMsJwtG0AAAAC/kiss-anime.gif",
+    "https://media.tenor.com/OQ0xWk_nWOcAAAAC/anime-kiss.gif"
+  ],
+  slap: [
+    "https://media.tenor.com/XiYuU9h44-AAAAAC/anime-slap.gif",
+    "https://media.tenor.com/EfgK5t5O3yIAAAAC/slap-anime.gif",
+    "https://media.tenor.com/WsIR5nUsV88AAAAC/anime-slap.gif"
+  ],
+  pat: [
+    "https://media.tenor.com/0Z0vTQkQYqIAAAAC/pat-anime.gif",
+    "https://media.tenor.com/7xqK9QwQyGcAAAAC/anime-pat.gif",
+    "https://media.tenor.com/2oOTpioFAacAAAAC/pat-head-anime.gif"
+  ],
+  punch: [
+    "https://media.tenor.com/6a42QlkAsT8AAAAC/anime-punch.gif",
+    "https://media.tenor.com/1V0J5V5V5V4AAAAC/punch.gif"
+  ],
+  dance: [
+    "https://media.tenor.com/0Z0vTQkQYqIAAAAC/dance-anime.gif",
+    "https://media.tenor.com/V5V5V5V5V5UAAAAC/anime-dance.gif"
+  ]
+};
+
+function pickGif(type) {
+  const list = FUN_GIFS[type] || FUN_GIFS.hug;
+  return list[Math.floor(Math.random() * list.length)];
+}
+
+const FUN_ACTIONS = {
+  sarıl: { emoji: EMOJI.hug, verb: "sarıldı", gif: "hug", color: 0xff9ff3 },
+  öp: { emoji: EMOJI.kiss, verb: "öpücük gönderdi", gif: "kiss", color: 0xff6b6b },
+  tokat: { emoji: EMOJI.slap, verb: "tokat attı", gif: "slap", color: 0xfeca57 },
+  okşa: { emoji: EMOJI.pat, verb: "okşadı", gif: "pat", color: 0x48dbfb },
+  yumruk: { emoji: "👊", verb: "yumruk attı", gif: "punch", color: 0xff6348 },
+  dans: { emoji: "💃", verb: "dans etti", gif: "dance", color: 0x5f27cd }
+};
+
+async function handleFunCommand(interaction) {
+  const name = interaction.commandName;
+  const config = getServerConfig(interaction.guildId);
+  if (config.toggles?.fun === false) {
+    return interaction.reply({ content: `${EMOJI.no} Eğlence komutları bu sunucuda kapalı.`, ephemeral: true });
+  }
+
+  // /ship
+  if (name === "ship") {
+    const u1 = interaction.options.getUser("kisi1") || interaction.user;
+    const u2 = interaction.options.getUser("kisi2");
+    if (!u2) return interaction.reply({ content: `${EMOJI.no} İkinci kişiyi seç.`, ephemeral: true });
+    const score = Math.floor(Math.random() * 101);
+    const bar = "█".repeat(Math.floor(score / 10)) + "░".repeat(10 - Math.floor(score / 10));
+    let comment = score > 80 ? "💘 Aşk mı bu?!" : score > 50 ? "💕 İyi gidiyor..." : score > 20 ? "🤔 Bir şans verilebilir." : "💔 Pek tutmadı...";
+    return interaction.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setTitle(`${EMOJI.ship} Ship`)
+          .setColor(0xff6b81)
+          .setDescription(`**${u1.username}** 💕 **${u2.username}**\n\n\`${bar}\` **${score}%**\n${comment}`)
+          .setFooter({ text: BRAND_FOOTER })
+      ]
+    });
+  }
+
+  // /8ball
+  if (name === "8ball") {
+    const q = interaction.options.getString("soru");
+    const answers = [
+      "Kesinlikle evet.", "Evet.", "Belki.", "Muhtemelen.", "Şüpheli...",
+      "Hayır.", "Asla.", "Tekrar sor.", "Cevabı bilmiyorum.", "Şansın yüksek!",
+      "Kaderinde yok.", "Emin değilim.", "Olumlu görünüyor.", "Olumsuz."
+    ];
+    const ans = answers[Math.floor(Math.random() * answers.length)];
+    return interaction.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setTitle(`${EMOJI.eightBall} 8Ball`)
+          .setColor(0x2c2f33)
+          .addFields(
+            { name: "Soru", value: q.slice(0, 500) },
+            { name: "Cevap", value: ans }
+          )
+          .setFooter({ text: BRAND_FOOTER })
+      ]
+    });
+  }
+
+  // /zar
+  if (name === "zar") {
+    const sides = interaction.options.getInteger("yuz") || 6;
+    const result = Math.floor(Math.random() * sides) + 1;
+    return interaction.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setTitle(`${EMOJI.dice} Zar`)
+          .setColor(0x5865f2)
+          .setDescription(`**${sides}** yüzlü zar → **${result}**`)
+          .setFooter({ text: BRAND_FOOTER })
+      ]
+    });
+  }
+
+  // /yazıtura
+  if (name === "yazıtura") {
+    const result = Math.random() < 0.5 ? "Yazı" : "Tura";
+    return interaction.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setTitle(`${EMOJI.coinFlip} Yazı Tura`)
+          .setColor(0xfee75c)
+          .setDescription(`Sonuç: **${result}**`)
+          .setFooter({ text: BRAND_FOOTER })
+      ]
+    });
+  }
+
+  // /rate
+  if (name === "rate") {
+    const what = interaction.options.getString("ne");
+    const score = Math.floor(Math.random() * 101);
+    const stars = "⭐".repeat(Math.ceil(score / 20)) + "☆".repeat(5 - Math.ceil(score / 20));
+    return interaction.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setTitle("📊 Rate")
+          .setColor(0xfee75c)
+          .setDescription(`**${what.slice(0, 100)}**\n\n${stars}\n**${score}/100**`)
+          .setFooter({ text: BRAND_FOOTER })
+      ]
+    });
+  }
+
+  // /howgay
+  if (name === "howgay") {
+    const target = interaction.options.getUser("kullanici") || interaction.user;
+    const score = Math.floor(Math.random() * 101);
+    const bar = "█".repeat(Math.floor(score / 10)) + "░".repeat(10 - Math.floor(score / 10));
+    let msg = score > 90 ? "🏳️‍🌈 Efsane!" : score > 60 ? "🌈 Oldukça gay" : score > 30 ? "🙂 Biraz gay" : "😐 Gay değil gibi";
+    return interaction.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setTitle("🌈 How Gay")
+          .setColor(0xff6b81)
+          .setDescription(`**${target.username}**\n\n\`${bar}\` **${score}%**\n${msg}`)
+          .setThumbnail(target.displayAvatarURL())
+          .setFooter({ text: BRAND_FOOTER })
+      ]
+    });
+  }
+
+  // /aşkölçer (ship alias with better name)
+  if (name === "aşkölçer") {
+    const u1 = interaction.options.getUser("kisi1");
+    const u2 = interaction.options.getUser("kisi2");
+    const score = Math.floor(Math.random() * 101);
+    const bar = "❤️".repeat(Math.floor(score / 20)) + "🤍".repeat(5 - Math.floor(score / 20));
+    let comment = score >= 90 ? "💍 Evlenin artık!" : score >= 70 ? "💘 Gerçek aşk!" : score >= 40 ? "💕 Umut var" : "💔 Zor...";
+    return interaction.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setTitle("💘 Aşk Ölçer")
+          .setColor(0xff6b81)
+          .setDescription(`**${u1.username}** × **${u2.username}**\n\n${bar}\n**${score}%**\n${comment}`)
+          .setFooter({ text: BRAND_FOOTER })
+      ]
+    });
+  }
+
+  // Action commands
+  const action = FUN_ACTIONS[name];
+  if (action) {
+    const target = interaction.options.getUser("kullanici") || interaction.user;
+    const self = target.id === interaction.user.id;
+    const gif = pickGif(action.gif);
+
+    const embed = new EmbedBuilder()
+      .setColor(action.color)
+      .setDescription(
+        self
+          ? `${action.emoji} **${interaction.user.username}** kendine ${action.verb}!`
+          : `${action.emoji} **${interaction.user.username}**, **${target.username}** kişisine ${action.verb}!`
+      )
+      .setImage(gif)
+      .setFooter({ text: BRAND_FOOTER });
+
+    return interaction.reply({ embeds: [embed] });
+  }
+
+  return false;
+}
+
+// ======================================================
+// CİNSİYET ROLLERİ + KAYIT PANELİ GELİŞTİRME
+// ======================================================
+
+async function ensureGenderRoles(guild, config) {
+  const names = {
+    male: `${EMOJI.male} Erkek`,
+    female: `${EMOJI.female} Kadın`,
+    unspecified: `${EMOJI.unspecified} Belirtmek İstemiyorum`
+  };
+  for (const [key, name] of Object.entries(names)) {
+    if (config.roles[key] && guild.roles.cache.get(config.roles[key])) continue;
+    let role = guild.roles.cache.find(r => r.name === name);
+    if (!role) {
+      role = await guild.roles.create({ name, reason: "Endless Builder cinsiyet rolü" }).catch(() => null);
+      if (role) {
+        config.createdIds ??= { categories: [], channels: [], roles: [] };
+        config.createdIds.roles.push(role.id);
+      }
+    }
+    if (role) config.roles[key] = role.id;
+  }
+  saveServerConfig(guild.id, config);
+}
+
+function genderLabel(key) {
+  if (key === "male") return `${EMOJI.male} Erkek`;
+  if (key === "female") return `${EMOJI.female} Kadın`;
+  if (key === "unspecified" || key === "none") return `${EMOJI.unspecified} Belirtmedi`;
+  return "*henüz seçilmedi*";
+}
+
+function buildRegEmbed(user, staffUser, session, genderEnabled, alreadyRegistered = false) {
+  const genderText = genderLabel(session?.gender);
+  const nickText = session?.nick ? `**${session.nick}**` : "*değiştirilmeyecek*";
+  return new EmbedBuilder()
+    .setTitle(`${EMOJI.register} ${EMOJI.dot} Kayıt Paneli`)
+    .setColor(alreadyRegistered ? 0xfaa61a : 0x57f287)
+    .setThumbnail(user.displayAvatarURL())
+    .setDescription(
+      `**Kayıt edilecek:** ${user} (\`${user.tag}\`)\n` +
+      `**Yetkili:** ${staffUser}\n` +
+      (alreadyRegistered ? `\n⚠️ Bu üye **zaten kayıtlı** görünüyor. Yine de devam edebilirsin.\n` : `\n`) +
+      (genderEnabled
+        ? `${EMOJI.spark} **Cinsiyet** seç (zorunlu değil), istersen **isim** değiştir.\nSonra **Kayıt Et** ile tamamla.\n\n🔒 Bu panel sadece sana özeldir; üye kendi cinsiyetini seçemez.`
+        : `${EMOJI.spark} İstersen isim değiştir, sonra **Kayıt Et** ile tamamla.`) +
+      `\n\n**Seçimler:**\n• Cinsiyet: ${genderText}\n• İsim: ${nickText}`
+    )
+    .setFooter({ text: BRAND_FOOTER });
+}
+
+function buildRegRows(targetId, genderEnabled, session) {
+  const rows = [];
+  if (genderEnabled) {
+    const g = session?.gender;
+    rows.push(new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`eb_reg_g:male:${targetId}`)
+        .setLabel(g === "male" ? "Erkek ✓" : "Erkek")
+        .setEmoji(EMOJI.male)
+        .setStyle(g === "male" ? ButtonStyle.Success : ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId(`eb_reg_g:female:${targetId}`)
+        .setLabel(g === "female" ? "Kadın ✓" : "Kadın")
+        .setEmoji(EMOJI.female)
+        .setStyle(g === "female" ? ButtonStyle.Success : ButtonStyle.Danger),
+      new ButtonBuilder()
+        .setCustomId(`eb_reg_g:none:${targetId}`)
+        .setLabel(g === "unspecified" ? "Belirtmedi ✓" : "Belirtmek İstemiyorum")
+        .setEmoji(EMOJI.unspecified)
+        .setStyle(g === "unspecified" ? ButtonStyle.Success : ButtonStyle.Secondary)
+    ));
+  }
+  rows.push(new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`eb_reg_name:${targetId}`)
+      .setLabel(session?.nick ? ("İsim: " + String(session.nick).slice(0, 18)) : "İsim Değiştir")
+      .setEmoji("✏️")
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`eb_reg_ok:${targetId}`).setLabel("Kayıt Et").setEmoji("✅").setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`eb_reg_cancel:${targetId}`).setLabel("İptal").setEmoji("❌").setStyle(ButtonStyle.Danger)
+  ));
+  return rows;
+}
+
+// Herkese açık cinsiyet paneli kaldırıldı.
+// Cinsiyet yalnızca yetkili /kayit ve /cinsiyet-degistir ile atanır.
+
+commands.push(
+  new SlashCommandBuilder()
+    .setName("özel-oda-kur")
+    .setDescription("Özel oda (secret room) sistemini kur")
+    .setDefaultMemberPermissions(PermissionsBitField.Flags.ManageGuild)
+    .setDMPermission(false)
+    .addChannelOption(o => o.setName("metin").setDescription("Yönetim panelinin gideceği metin kanalı").addChannelTypes(ChannelType.GuildText).setRequired(true))
+    .addChannelOption(o => o.setName("ses").setDescription("Giriş ses kanalı (buraya girince oda oluşur)").addChannelTypes(ChannelType.GuildVoice).setRequired(true))
+    .addChannelOption(o => o.setName("kategori").setDescription("Odaların oluşacağı kategori (boşsa otomatik)").addChannelTypes(ChannelType.GuildCategory).setRequired(false)),
+
+  new SlashCommandBuilder().setName("sarıl").setDescription("Birine sarıl").setDMPermission(false)
+    .addUserOption(o => o.setName("kullanici").setDescription("Hedef")),
+  new SlashCommandBuilder().setName("öp").setDescription("Birini öp").setDMPermission(false)
+    .addUserOption(o => o.setName("kullanici").setDescription("Hedef")),
+  new SlashCommandBuilder().setName("tokat").setDescription("Birine tokat at").setDMPermission(false)
+    .addUserOption(o => o.setName("kullanici").setDescription("Hedef")),
+  new SlashCommandBuilder().setName("okşa").setDescription("Birini okşa").setDMPermission(false)
+    .addUserOption(o => o.setName("kullanici").setDescription("Hedef")),
+  new SlashCommandBuilder().setName("yumruk").setDescription("Birine yumruk at").setDMPermission(false)
+    .addUserOption(o => o.setName("kullanici").setDescription("Hedef")),
+  new SlashCommandBuilder().setName("dans").setDescription("Dans et").setDMPermission(false)
+    .addUserOption(o => o.setName("kullanici").setDescription("Hedef (opsiyonel)")),
+  new SlashCommandBuilder().setName("ship").setDescription("İki kişiyi ship'le").setDMPermission(false)
+    .addUserOption(o => o.setName("kisi1").setDescription("1. kişi"))
+    .addUserOption(o => o.setName("kisi2").setDescription("2. kişi").setRequired(true)),
+  new SlashCommandBuilder().setName("8ball").setDescription("Sihirli 8 topa sor").setDMPermission(false)
+    .addStringOption(o => o.setName("soru").setDescription("Sorun").setRequired(true).setMaxLength(500)),
+  new SlashCommandBuilder().setName("zar").setDescription("Zar at").setDMPermission(false)
+    .addIntegerOption(o => o.setName("yuz").setDescription("Yüz sayısı (varsayılan 6)").setMinValue(2).setMaxValue(100)),
+  new SlashCommandBuilder().setName("yazıtura").setDescription("Yazı tura at").setDMPermission(false),
+  new SlashCommandBuilder().setName("kayitsizlar").setDescription("Kayıtsız üyeleri listele (yetkili)")
+    .setDefaultMemberPermissions(PermissionsBitField.Flags.ManageRoles).setDMPermission(false),
+  new SlashCommandBuilder().setName("rate").setDescription("Birini veya bir şeyi puanla (0-100)")
+    .setDMPermission(false)
+    .addStringOption(o => o.setName("ne").setDescription("Ne puanlanacak?").setRequired(true).setMaxLength(100)),
+  new SlashCommandBuilder().setName("howgay").setDescription("Ne kadar gay? 🌈")
+    .setDMPermission(false)
+    .addUserOption(o => o.setName("kullanici").setDescription("Hedef")),
+  new SlashCommandBuilder().setName("aşkölçer").setDescription("İki kişi arasındaki aşkı ölç")
+    .setDMPermission(false)
+    .addUserOption(o => o.setName("kisi1").setDescription("1. kişi").setRequired(true))
+    .addUserOption(o => o.setName("kisi2").setDescription("2. kişi").setRequired(true)),
+  // Yetkili: kayıt sonrası cinsiyet düzeltme (herkese açık panel yerine)
+  new SlashCommandBuilder()
+    .setName("cinsiyet-degistir")
+    .setDescription("Üyenin cinsiyet rolünü değiştir (yalnızca yetkili)")
+    .setDefaultMemberPermissions(PermissionsBitField.Flags.ManageRoles)
+    .setDMPermission(false)
+    .addUserOption(o => o.setName("kullanici").setDescription("Üye").setRequired(true))
+    .addStringOption(o =>
+      o.setName("cinsiyet")
+        .setDescription("Yeni cinsiyet")
+        .setRequired(true)
+        .addChoices(
+          { name: "Erkek", value: "male" },
+          { name: "Kadın", value: "female" },
+          { name: "Belirtmek İstemiyorum", value: "unspecified" }
+        )
+    )
+);
+
+async function applyRegistration(guild, member, staffUser, genderKey = null, newNick = null) {
+  const config = getServerConfig(guild.id);
+  await ensureGenderRoles(guild, config);
+
+  const registeredRole = config.registration?.registeredRoleId || config.roles?.member;
+  const unregisteredRole = config.registration?.unregisteredRoleId || config.roles?.unregistered;
+
+  if (unregisteredRole) await member.roles.remove(unregisteredRole).catch(() => {});
+  if (registeredRole) await member.roles.add(registeredRole).catch(() => {});
+
+  if (genderKey) {
+    const normalized = genderKey === "none" ? "unspecified" : genderKey;
+    for (const k of ["male", "female", "unspecified"]) {
+      const rid = config.roles[k];
+      if (rid && member.roles.cache.has(rid) && k !== normalized) {
+        await member.roles.remove(rid).catch(() => {});
+      }
+    }
+    const gRole = config.roles[normalized];
+    if (gRole) await member.roles.add(gRole).catch(() => {});
+  }
+
+  if (newNick && newNick.length >= 1 && newNick.length <= 32) {
+    const me = guild.members.me;
+    if (me && member.roles.highest.position < me.roles.highest.position) {
+      await member.setNickname(newNick, `Kayıt: ${staffUser.tag}`).catch(() => {});
+    }
+  }
+
+  await sendLog(
+    guild,
+    `📝 ${member.user} kayıt edildi.\n**Yetkili:** ${staffUser}\n**Cinsiyet:** ${genderLabel(genderKey)}${newNick ? `\n**İsim:** ${newNick}` : ""}`
+  );
+  return true;
+}
+
+async function applyGenderOnly(guild, member, staffUser, genderKey) {
+  const config = getServerConfig(guild.id);
+  await ensureGenderRoles(guild, config);
+  const normalized = genderKey === "none" ? "unspecified" : genderKey;
+  for (const k of ["male", "female", "unspecified"]) {
+    const rid = config.roles[k];
+    if (rid && member.roles.cache.has(rid) && k !== normalized) {
+      await member.roles.remove(rid).catch(() => {});
+    }
+  }
+  const gRole = config.roles[normalized];
+  if (gRole) await member.roles.add(gRole).catch(() => {});
+  await sendLog(
+    guild,
+    `🎭 ${member.user} cinsiyeti güncellendi: ${genderLabel(normalized)}\n**Yetkili:** ${staffUser}`
+  );
+  return true;
+}
+
+async function handleRegPanel(interaction) {
+  const id = interaction.customId || "";
+  if (!id.startsWith("eb_reg_")) return false;
+
+  const parts = id.split(":");
+  const action = parts[0];
+  let genderKey = null;
+  let targetId = null;
+
+  if (action === "eb_reg_g") {
+    genderKey = parts[1];
+    targetId = parts[2];
+  } else {
+    targetId = parts[1];
+  }
+
+  if (!targetId) {
+    return interaction.reply({ content: `${EMOJI.no} Geçersiz işlem.`, ephemeral: true });
+  }
+
+  const config = getServerConfig(interaction.guildId);
+  if (!canRegister(interaction, config)) {
+    return interaction.reply({ content: `${EMOJI.no} Kayıt yetkin yok.`, ephemeral: true });
+  }
+
+  const regKey = `${interaction.user.id}:${targetId}`;
+  let session = regSessions.get(regKey);
+  if (!session) {
+    session = { gender: null, nick: null, staffId: interaction.user.id, targetId, createdAt: Date.now() };
+    regSessions.set(regKey, session);
+  }
+
+  if (id.startsWith("eb_reg_cancel:")) {
+    regSessions.delete(regKey);
+    return interaction.update({ content: "❌ Kayıt iptal edildi.", embeds: [], components: [] });
+  }
+
+  const member = await interaction.guild.members.fetch(targetId).catch(() => null);
+  if (!member) {
+    regSessions.delete(regKey);
+    return interaction.update({ content: `${EMOJI.no} Kullanıcı artık sunucuda değil.`, embeds: [], components: [] });
+  }
+
+  const genderEnabled = config.registration?.genderEnabled !== false;
+  const unregId = config.registration?.unregisteredRoleId || config.roles?.unregistered;
+  const alreadyRegistered = unregId
+    ? !member.roles.cache.has(unregId)
+    : Boolean(config.roles?.member && member.roles.cache.has(config.roles.member));
+
+  if (id.startsWith("eb_reg_name:")) {
+    const nickInput = new TextInputBuilder()
+      .setCustomId("nick")
+      .setLabel("Yeni isim (1-32 karakter)")
+      .setStyle(TextInputStyle.Short)
+      .setMinLength(1)
+      .setMaxLength(32)
+      .setRequired(true)
+      .setPlaceholder(member.displayName);
+    if (session.nick) nickInput.setValue(String(session.nick).slice(0, 32));
+
+    await interaction.showModal(
+      new ModalBuilder()
+        .setCustomId(`eb_reg_nick:${targetId}`)
+        .setTitle("Kayıt İsmi")
+        .addComponents(new ActionRowBuilder().addComponents(nickInput))
+    );
+    return true;
+  }
+
+  if (action === "eb_reg_g") {
+    const map = { male: "male", female: "female", none: "unspecified" };
+    session.gender = map[genderKey] || null;
+    regSessions.set(regKey, session);
+    return interaction.update({
+      embeds: [buildRegEmbed(member.user, interaction.user, session, genderEnabled, alreadyRegistered)],
+      components: buildRegRows(targetId, genderEnabled, session)
+    });
+  }
+
+  if (id.startsWith("eb_reg_ok:")) {
+    await applyRegistration(interaction.guild, member, interaction.user, session.gender, session.nick);
+    regSessions.delete(regKey);
+    const nickLine = session.nick ? `\nİsim: **${session.nick}**` : "";
+    return interaction.update({
+      content: `${EMOJI.ok} **${member.user.tag}** başarıyla kayıt edildi!\nCinsiyet: ${genderLabel(session.gender)}${nickLine}`,
+      embeds: [],
+      components: []
+    });
+  }
+
+  return false;
+}
+
+async function handleRegModal(interaction) {
+  if (!interaction.customId.startsWith("eb_reg_nick:")) return false;
+  const targetId = interaction.customId.split(":")[1];
+  const config = getServerConfig(interaction.guildId);
+  if (!canRegister(interaction, config)) {
+    return interaction.reply({ content: `${EMOJI.no} Kayıt yetkin yok.`, ephemeral: true });
+  }
+
+  const nick = interaction.fields.getTextInputValue("nick").trim();
+  if (!nick || nick.length > 32) {
+    return interaction.reply({ content: `${EMOJI.no} Geçersiz isim.`, ephemeral: true });
+  }
+
+  const member = await interaction.guild.members.fetch(targetId).catch(() => null);
+  if (!member) {
+    return interaction.reply({ content: `${EMOJI.no} Kullanıcı bulunamadı.`, ephemeral: true });
+  }
+
+  const regKey = `${interaction.user.id}:${targetId}`;
+  let session = regSessions.get(regKey);
+  if (!session) {
+    session = { gender: null, nick: null, staffId: interaction.user.id, targetId, createdAt: Date.now() };
+  }
+  session.nick = nick;
+  regSessions.set(regKey, session);
+
+  return interaction.reply({
+    content:
+      `${EMOJI.ok} İsim **${nick}** olarak ayarlandı.\n` +
+      `Cinsiyet: ${genderLabel(session.gender)}\n\n` +
+      `Kaydı tamamlamak için paneldeki **Kayıt Et** butonuna bas.`,
+    ephemeral: true
+  });
+}
+
+setInterval(() => {
+  const limit = Date.now() - 30 * 60 * 1000;
+  for (const [key, s] of regSessions) {
+    if ((s.createdAt || 0) < limit) regSessions.delete(key);
+  }
+}, 10 * 60 * 1000).unref();
+
+client.on("interactionCreate", async (interaction) => {
+  try {
+    if (!interaction.guild) return;
+
+    // Özel oda buton / modal / select
+    if (interaction.isButton() && interaction.customId.startsWith("eb_tv_")) {
+      await handleTempVoiceButton(interaction);
+      return;
+    }
+    if (interaction.isModalSubmit() && interaction.customId.startsWith("eb_tv_")) {
+      await handleTempVoiceModal(interaction);
+      return;
+    }
+    if (interaction.isUserSelectMenu() && interaction.customId === "eb_tv_kick_select") {
+      await handleTempVoiceSelect(interaction);
+      return;
+    }
+
+    // Kayıt paneli
+    if (interaction.isButton() && interaction.customId.startsWith("eb_reg_")) {
+      await handleRegPanel(interaction);
+      return;
+    }
+    if (interaction.isModalSubmit() && interaction.customId.startsWith("eb_reg_")) {
+      await handleRegModal(interaction);
+      return;
+    }
+
+
+    // Eğlence + özel oda kur komutları
+    if (interaction.isChatInputCommand()) {
+      const n = interaction.commandName;
+      if (n === "özel-oda-kur") {
+        await setupTempVoice(interaction);
+        return;
+      }
+      if (n === "cinsiyet-degistir") {
+        const config = getServerConfig(interaction.guildId);
+        if (!canRegister(interaction, config) && !canManageGuild(interaction)) {
+          return interaction.reply({ content: `${EMOJI.no} Bu komut için kayıt yetkisi gerekir.`, ephemeral: true });
+        }
+        if (config.registration?.genderEnabled === false) {
+          return interaction.reply({ content: `${EMOJI.no} Cinsiyet sistemi bu sunucuda kapalı.`, ephemeral: true });
+        }
+        const target = interaction.options.getUser("kullanici");
+        const gender = interaction.options.getString("cinsiyet");
+        if (!target || target.bot) {
+          return interaction.reply({ content: `${EMOJI.no} Geçerli bir üye seç.`, ephemeral: true });
+        }
+        const member = await interaction.guild.members.fetch(target.id).catch(() => null);
+        if (!member) {
+          return interaction.reply({ content: `${EMOJI.no} Kullanıcı sunucuda değil.`, ephemeral: true });
+        }
+        await applyGenderOnly(interaction.guild, member, interaction.user, gender);
+        return interaction.reply({
+          content: `${EMOJI.ok} ${target} cinsiyeti güncellendi: ${genderLabel(gender)}`,
+          ephemeral: true,
+          allowedMentions: { users: [] }
+        });
+      }
+      if (["sarıl", "öp", "tokat", "okşa", "yumruk", "dans", "ship", "8ball", "zar", "yazıtura", "rate", "howgay", "aşkölçer"].includes(n)) {
+        await handleFunCommand(interaction);
+        return;
+      }
+      if (n === "kayitsizlar") {
+        const config = getServerConfig(interaction.guildId);
+        if (!canRegister(interaction, config) && !canManageGuild(interaction)) {
+          return interaction.reply({ content: `${EMOJI.no} Yetkin yok.`, ephemeral: true });
+        }
+        const unregId = config.registration?.unregisteredRoleId || config.roles?.unregistered;
+        if (!unregId) {
+          return interaction.reply({ content: `${EMOJI.no} Kayıtsız rolü ayarlı değil.`, ephemeral: true });
+        }
+        const role = interaction.guild.roles.cache.get(unregId);
+        if (!role) {
+          return interaction.reply({ content: `${EMOJI.no} Kayıtsız rolü bulunamadı.`, ephemeral: true });
+        }
+        const members = [...role.members.values()].filter(m => !m.user.bot).slice(0, 30);
+        if (!members.length) {
+          return interaction.reply({ content: `${EMOJI.ok} Kayıtsız üye yok!`, ephemeral: true });
+        }
+        const lines = members.map((m, i) => `${i + 1}. ${m} (\`${m.user.tag}\`)`);
+        return interaction.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle(`${EMOJI.register} Kayıtsız Üyeler`)
+              .setColor(0xfaa61a)
+              .setDescription(lines.join("\n") + (role.members.size > 30 ? `\n\n... ve ${role.members.size - 30} kişi daha` : ""))
+              .setFooter({ text: `Toplam: ${role.members.filter(m => !m.user.bot).size} • ${BRAND_FOOTER}` })
+          ],
+          ephemeral: true,
+          allowedMentions: { parse: [] }
+        });
+      }
+    }
+  } catch (error) {
+    console.error("EXTRA FEATURES INTERACTION ERROR:", error);
+    if (interaction.isRepliable?.() && !interaction.replied && !interaction.deferred) {
+      await interaction.reply({ content: `${EMOJI.no} Bir hata oluştu.`, ephemeral: true }).catch(() => {});
+    }
+  }
+});
 
 // ======================================================
 // LOGIN
