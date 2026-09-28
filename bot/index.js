@@ -5286,8 +5286,9 @@ async function handleModeration(interaction) {
 // ---------- OWNER: PARA VER ----------
 
 async function handleParaVer(interaction) {
-  if (!isOwnerMember(interaction)) {
-    return deny(interaction, "❌ Bu komutu sadece **sunucu sahibi** kullanabilir.");
+  // Sunucu sahibi veya Administrator yetkisi olan herkes para verebilir
+  if (!isAdmin(interaction)) {
+    return deny(interaction, "❌ Bu komutu sadece **sunucu sahibi** veya **Administrator** yetkisi olanlar kullanabilir.");
   }
   const target = interaction.options.getUser("kullanici");
   const amount = interaction.options.getInteger("miktar");
@@ -5302,7 +5303,7 @@ async function handleParaVer(interaction) {
   if (given <= 0) return deny(interaction, "❌ Bu kullanıcı bakiye üst sınırında.");
   saveServerConfig(interaction.guildId, config);
 
-  await sendLog(interaction.guild, `🪙 ${interaction.user} (sahip) ${target} kullanıcısına ${coin(config, given)} verdi.`);
+  await sendLog(interaction.guild, `🪙 ${interaction.user} (yönetici) ${target} kullanıcısına ${coin(config, given)} verdi.`);
   return interaction.reply({
     content: `${EMOJI.ok} ${target} kullanıcısına ${coin(config, given)} verildi.\n👛 Yeni bakiye: ${coin(config, u.balance)}`,
     ephemeral: true,
@@ -5998,7 +5999,9 @@ const HELP_CATEGORIES = [
   { key: "cekilis", label: "Çekiliş", emoji: "🎁", cmds: ["cekilis", "cekilis-bitir"] },
   { key: "ai", label: "AI", emoji: "🤖", cmds: ["ai", "ai-kanal"] },
   { key: "guvenlik", label: "Güvenlik", emoji: "🔐", cmds: ["antiraid", "automod"] },
-  { key: "ayarlar", label: "Ayarlar", emoji: "⚙️", cmds: ["ayarlar", "premium", "yardım"] }
+  { key: "ayarlar", label: "Ayarlar", emoji: "⚙️", cmds: ["ayarlar", "premium", "yardım"] },
+  { key: "araclar", label: "Araçlar", emoji: "🧰", cmds: ["afk", "avatar", "kullanici", "sunucu", "snipe", "anket", "rastgele", "hesapla", "hatirlat", "emojiler", "ping", "say", "özel-oda-kur"] },
+  { key: "eglence", label: "Eğlence", emoji: "🎉", cmds: ["sarıl", "öp", "tokat", "okşa", "yumruk", "dans", "ship", "8ball", "zar", "yazıtura", "rate", "howgay", "aşkölçer"] }
 ];
 
 function helpMenuRow(selected) {
@@ -6077,7 +6080,7 @@ commands.push(
     .addIntegerOption(o => o.setName("numara").setDescription("Silinecek uyarı numarası").setMinValue(1))
     .addBooleanOption(o => o.setName("hepsi").setDescription("Tüm uyarıları sil")),
   new SlashCommandBuilder()
-    .setName("para-ver").setDescription("Sunucu sahibine özel: bir kullanıcıya Endless Coin ver")
+    .setName("para-ver").setDescription("Yönetici: bir kullanıcıya Endless Coin ver (bakiye düşmez)")
     .setDefaultMemberPermissions(F.Administrator).setDMPermission(false)
     .addUserOption(o => o.setName("kullanici").setDescription("Para verilecek kullanıcı (kendin de olabilir)").setRequired(true))
     .addIntegerOption(o => o.setName("miktar").setDescription("Verilecek miktar").setMinValue(1).setMaxValue(MAX_BALANCE).setRequired(true)),
@@ -7019,6 +7022,10 @@ async function handleExtraInteraction(interaction) {
     const n = interaction.commandName;
     if (MOD_COMMANDS.includes(n)) { await handleModeration(interaction); return true; }
     if (n === "para-ver") { await handleParaVer(interaction); return true; }
+    if (typeof UTILITY_COMMANDS !== "undefined" && UTILITY_COMMANDS.includes(n)) {
+      await handleUtilityCommand(interaction);
+      return true;
+    }
     if (n === "automod") { await handleAutoModCommand(interaction); return true; }
     if (n === "antiraid") { await handleAntiRaidCommand(interaction); return true; }
     if (n === "ai" || n === "ai-kanal") { await handleAiCommand(interaction); return true; }
@@ -9675,6 +9682,7 @@ client.on(
       if (await handleAutoMod(message)) return;
       if (await handleAntiRaidMessage(message)) return;
 
+      await handleAfkMessage(message);
       await handleXp(message);
 
       // AI kanalı
@@ -9832,7 +9840,8 @@ async function setupTempVoice(interaction) {
         new ButtonBuilder().setCustomId("eb_tv_limit").setLabel("Limit Ayarla").setEmoji("👥").setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId("eb_tv_lock").setLabel("Kilitle / Aç").setEmoji("🔒").setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId("eb_tv_rename").setLabel("İsim Değiştir").setEmoji("✏️").setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId("eb_tv_kick").setLabel("Üye At").setEmoji("👢").setStyle(ButtonStyle.Danger)
+        new ButtonBuilder().setCustomId("eb_tv_kick").setLabel("Üye At").setEmoji("👢").setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId("eb_tv_allow").setLabel("İzin Ver").setEmoji("✅").setStyle(ButtonStyle.Success)
       )
     ]
   };
@@ -9973,6 +9982,17 @@ async function handleTempVoiceButton(interaction) {
     return true;
   }
 
+  if (id === "eb_tv_allow") {
+    await interaction.reply({
+      content: "Odaya giriş izni verilecek üyeyi seç:",
+      components: [new ActionRowBuilder().addComponents(
+        new UserSelectMenuBuilder().setCustomId("eb_tv_allow_select").setPlaceholder("Üye seç").setMinValues(1).setMaxValues(1)
+      )],
+      ephemeral: true
+    });
+    return true;
+  }
+
   return false;
 }
 
@@ -10006,7 +10026,10 @@ async function handleTempVoiceModal(interaction) {
 }
 
 async function handleTempVoiceSelect(interaction) {
-  if (interaction.customId !== "eb_tv_kick_select") return false;
+  const isKick = interaction.customId === "eb_tv_kick_select";
+  const isAllow = interaction.customId === "eb_tv_allow_select";
+  if (!isKick && !isAllow) return false;
+
   const config = getServerConfig(interaction.guildId);
   const tv = tvCfg(config);
   const ownerRoom = Object.entries(tv.rooms).find(([, r]) => r.ownerId === interaction.user.id);
@@ -10014,13 +10037,33 @@ async function handleTempVoiceSelect(interaction) {
 
   const [roomId] = ownerRoom;
   const channel = interaction.guild.channels.cache.get(roomId);
+  if (!channel) return interaction.reply({ content: `${EMOJI.no} Oda bulunamadı.`, ephemeral: true });
+
   const targetId = interaction.values[0];
+
+  if (isAllow) {
+    if (targetId === interaction.user.id) {
+      return interaction.reply({ content: `${EMOJI.no} Kendine zaten izin var.`, ephemeral: true });
+    }
+    await channel.permissionOverwrites.edit(targetId, {
+      Connect: true,
+      Speak: true,
+      Stream: true
+    }).catch(() => {});
+    return interaction.reply({
+      content: `${EMOJI.ok} <@${targetId}> odana giriş izni aldı.`,
+      ephemeral: true
+    });
+  }
+
   if (targetId === interaction.user.id) return interaction.reply({ content: `${EMOJI.no} Kendini atamazsın.`, ephemeral: true });
 
-  const target = channel?.members.get(targetId);
+  const target = channel.members.get(targetId);
   if (!target) return interaction.reply({ content: `${EMOJI.no} Bu üye odanda değil.`, ephemeral: true });
 
   await target.voice.disconnect("Oda sahibi tarafından atıldı").catch(() => {});
+  // İzni de kaldır
+  await channel.permissionOverwrites.delete(targetId).catch(() => {});
   return interaction.reply({ content: `${EMOJI.ok} <@${targetId}> odadan atıldı.`, ephemeral: true });
 }
 
@@ -10583,7 +10626,7 @@ client.on("interactionCreate", async (interaction) => {
       await handleTempVoiceModal(interaction);
       return;
     }
-    if (interaction.isUserSelectMenu() && interaction.customId === "eb_tv_kick_select") {
+    if (interaction.isUserSelectMenu() && (interaction.customId === "eb_tv_kick_select" || interaction.customId === "eb_tv_allow_select")) {
       await handleTempVoiceSelect(interaction);
       return;
     }
@@ -10634,6 +10677,10 @@ client.on("interactionCreate", async (interaction) => {
         await handleFunCommand(interaction);
         return;
       }
+      if (UTILITY_COMMANDS.includes(n)) {
+        await handleUtilityCommand(interaction);
+        return;
+      }
       if (n === "kayitsizlar") {
         const config = getServerConfig(interaction.guildId);
         if (!canRegister(interaction, config) && !canManageGuild(interaction)) {
@@ -10670,6 +10717,534 @@ client.on("interactionCreate", async (interaction) => {
     if (interaction.isRepliable?.() && !interaction.replied && !interaction.deferred) {
       await interaction.reply({ content: `${EMOJI.no} Bir hata oluştu.`, ephemeral: true }).catch(() => {});
     }
+  }
+});
+
+
+// ======================================================
+// YARDIMCI SİSTEMLER (AFK, Snipe, Bilgi, Anket, Hatırlatıcı...)
+// ======================================================
+
+const afkMap = new Map(); // `${guildId}:${userId}` -> { reason, since }
+const snipeMap = new Map(); // channelId -> { content, authorTag, authorId, avatar, createdAt, deletedAt, attachments }
+const remindTimers = new Map(); // id -> timeout handle
+let remindSeq = 1;
+
+function afkKey(guildId, userId) {
+  return `${guildId}:${userId}`;
+}
+
+function setAfk(guildId, userId, reason) {
+  afkMap.set(afkKey(guildId, userId), {
+    reason: (reason || "Sebep belirtilmedi").slice(0, 200),
+    since: Date.now()
+  });
+}
+
+function clearAfk(guildId, userId) {
+  return afkMap.delete(afkKey(guildId, userId));
+}
+
+function getAfk(guildId, userId) {
+  return afkMap.get(afkKey(guildId, userId)) || null;
+}
+
+function formatDuration(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  const parts = [];
+  if (d) parts.push(`${d}g`);
+  if (h) parts.push(`${h}s`);
+  if (m) parts.push(`${m}dk`);
+  if (!d && !h) parts.push(`${sec}sn`);
+  return parts.join(" ") || "0sn";
+}
+
+async function handleAfkMessage(message) {
+  if (!message.guild || message.author.bot) return;
+
+  // Kendi AFK'sını kaldır
+  if (clearAfk(message.guild.id, message.author.id)) {
+    await message.reply({
+      content: `${EMOJI.ok} AFK modundan çıktın.`,
+      allowedMentions: { repliedUser: false }
+    }).catch(() => {});
+  }
+
+  // Etiketlenen AFK üyeleri bildir
+  const mentioned = message.mentions.users;
+  if (!mentioned.size) return;
+
+  const lines = [];
+  for (const user of mentioned.values()) {
+    if (user.bot || user.id === message.author.id) continue;
+    const data = getAfk(message.guild.id, user.id);
+    if (!data) continue;
+    lines.push(
+      `💤 **${user.username}** AFK: ${data.reason}\n` +
+      `⏱️ <t:${Math.floor(data.since / 1000)}:R>`
+    );
+    if (lines.length >= 5) break;
+  }
+
+  if (lines.length) {
+    await message.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(0x99aab5)
+          .setDescription(lines.join("\n\n"))
+          .setFooter({ text: BRAND_FOOTER })
+      ],
+      allowedMentions: { repliedUser: false }
+    }).catch(() => {});
+  }
+}
+
+async function handleSnipeStore(message) {
+  if (!message.guild || message.author?.bot) return;
+  if (!message.content && !message.attachments?.size) return;
+
+  snipeMap.set(message.channel.id, {
+    content: (message.content || "").slice(0, 1000) || null,
+    authorTag: message.author.tag,
+    authorId: message.author.id,
+    avatar: message.author.displayAvatarURL(),
+    createdAt: message.createdTimestamp,
+    deletedAt: Date.now(),
+    attachments: [...(message.attachments?.values() || [])]
+      .slice(0, 3)
+      .map(a => a.url)
+  });
+
+  // 5 dk sonra otomatik temizle
+  setTimeout(() => {
+    const cur = snipeMap.get(message.channel.id);
+    if (cur && cur.deletedAt && Date.now() - cur.deletedAt >= 5 * 60 * 1000 - 1000) {
+      snipeMap.delete(message.channel.id);
+    }
+  }, 5 * 60 * 1000).unref?.();
+}
+
+async function handleUtilityCommand(interaction) {
+  const name = interaction.commandName;
+  if (!interaction.guild) {
+    return interaction.reply({ content: "❌ Bu komut sadece sunucuda kullanılabilir.", ephemeral: true });
+  }
+
+  // ---------- /afk ----------
+  if (name === "afk") {
+    const reason = interaction.options.getString("sebep") || "Sebep belirtilmedi";
+    setAfk(interaction.guildId, interaction.user.id, reason);
+    return interaction.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setTitle("💤 AFK")
+          .setColor(0x99aab5)
+          .setDescription(`${interaction.user} artık **AFK**.\n**Sebep:** ${reason.slice(0, 200)}`)
+          .setFooter({ text: BRAND_FOOTER })
+      ]
+    });
+  }
+
+  // ---------- /avatar ----------
+  if (name === "avatar") {
+    const user = interaction.options.getUser("kullanici") || interaction.user;
+    const url = user.displayAvatarURL({ size: 4096 });
+    return interaction.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setTitle(`🖼️ ${user.username} • Avatar`)
+          .setColor(0x5865f2)
+          .setImage(url)
+          .setDescription(`[PNG](${user.displayAvatarURL({ size: 4096, extension: "png" })}) • [JPG](${user.displayAvatarURL({ size: 4096, extension: "jpg" })}) • [WEBP](${user.displayAvatarURL({ size: 4096, extension: "webp" })})`)
+          .setFooter({ text: BRAND_FOOTER })
+      ]
+    });
+  }
+
+  // ---------- /kullanici ----------
+  if (name === "kullanici") {
+    const user = interaction.options.getUser("kullanici") || interaction.user;
+    const member = await interaction.guild.members.fetch(user.id).catch(() => null);
+    const roles = member
+      ? [...member.roles.cache.values()]
+          .filter(r => r.id !== interaction.guild.id)
+          .sort((a, b) => b.position - a.position)
+          .slice(0, 15)
+          .map(r => `${r}`)
+          .join(" ") || "Yok"
+      : "Sunucuda değil";
+
+    const embed = new EmbedBuilder()
+      .setTitle(`👤 ${user.username}`)
+      .setThumbnail(user.displayAvatarURL({ size: 256 }))
+      .setColor(member?.displayColor || 0x5865f2)
+      .addFields(
+        { name: "ID", value: `\`${user.id}\``, inline: true },
+        { name: "Bot", value: user.bot ? "Evet" : "Hayır", inline: true },
+        { name: "Hesap", value: `<t:${Math.floor(user.createdTimestamp / 1000)}:R>`, inline: true }
+      )
+      .setFooter({ text: BRAND_FOOTER })
+      .setTimestamp();
+
+    if (member) {
+      embed.addFields(
+        { name: "Katılma", value: `<t:${Math.floor(member.joinedTimestamp / 1000)}:R>`, inline: true },
+        { name: "Takma ad", value: member.nickname || "—", inline: true },
+        { name: "Boost", value: member.premiumSince ? `<t:${Math.floor(member.premiumSinceTimestamp / 1000)}:R>` : "Yok", inline: true },
+        { name: `Roller (${member.roles.cache.size - 1})`, value: roles.slice(0, 1024) }
+      );
+    }
+
+    return interaction.reply({ embeds: [embed], allowedMentions: { parse: [] } });
+  }
+
+  // ---------- /sunucu ----------
+  if (name === "sunucu") {
+    const g = interaction.guild;
+    await g.members.fetch().catch(() => {});
+    const owner = await g.fetchOwner().catch(() => null);
+    const text = g.channels.cache.filter(c => c.type === ChannelType.GuildText).size;
+    const voice = g.channels.cache.filter(c => c.type === ChannelType.GuildVoice).size;
+    const cats = g.channels.cache.filter(c => c.type === ChannelType.GuildCategory).size;
+    const bots = g.members.cache.filter(m => m.user.bot).size;
+    const humans = (g.memberCount || g.members.cache.size) - bots;
+
+    const embed = new EmbedBuilder()
+      .setTitle(`🌐 ${g.name}`)
+      .setColor(0x5865f2)
+      .setThumbnail(g.iconURL({ size: 256 }))
+      .addFields(
+        { name: "Sahip", value: owner ? `${owner.user.tag}` : "—", inline: true },
+        { name: "ID", value: `\`${g.id}\``, inline: true },
+        { name: "Oluşturulma", value: `<t:${Math.floor(g.createdTimestamp / 1000)}:R>`, inline: true },
+        { name: "Üye", value: `👤 ${humans} • 🤖 ${bots} • Toplam **${g.memberCount}**`, inline: false },
+        { name: "Kanallar", value: `💬 ${text} • 🔊 ${voice} • 📁 ${cats}`, inline: true },
+        { name: "Roller", value: String(g.roles.cache.size), inline: true },
+        { name: "Emoji", value: String(g.emojis.cache.size), inline: true },
+        { name: "Boost", value: `Seviye **${g.premiumTier}** • ${g.premiumSubscriptionCount || 0} boost`, inline: true },
+        { name: "Doğrulama", value: String(g.verificationLevel), inline: true }
+      )
+      .setFooter({ text: BRAND_FOOTER })
+      .setTimestamp();
+
+    if (g.bannerURL()) embed.setImage(g.bannerURL({ size: 1024 }));
+    return interaction.reply({ embeds: [embed] });
+  }
+
+  // ---------- /snipe ----------
+  if (name === "snipe") {
+    const data = snipeMap.get(interaction.channelId);
+    if (!data) {
+      return interaction.reply({
+        content: "📭 Bu kanalda yakın zamanda silinen mesaj yok (en fazla 5 dk hatırlanır).",
+        ephemeral: true
+      });
+    }
+
+    const embed = new EmbedBuilder()
+      .setTitle("🔫 Snipe")
+      .setColor(0xed4245)
+      .setAuthor({ name: data.authorTag, iconURL: data.avatar })
+      .setDescription(data.content || "*[sadece medya]*")
+      .addFields(
+        { name: "Yazılma", value: `<t:${Math.floor(data.createdAt / 1000)}:R>`, inline: true },
+        { name: "Silinme", value: `<t:${Math.floor(data.deletedAt / 1000)}:R>`, inline: true }
+      )
+      .setFooter({ text: BRAND_FOOTER });
+
+    if (data.attachments?.[0]) embed.setImage(data.attachments[0]);
+
+    return interaction.reply({ embeds: [embed] });
+  }
+
+  // ---------- /anket ----------
+  if (name === "anket") {
+    if (!hasPermission(interaction, PermissionsBitField.Flags.ManageMessages)) {
+      return interaction.reply({
+        content: "❌ Anket için **Mesajları Yönet** yetkisi gerekir.",
+        ephemeral: true
+      });
+    }
+
+    const soru = interaction.options.getString("soru").trim();
+    const optsRaw = [
+      interaction.options.getString("secenek1"),
+      interaction.options.getString("secenek2"),
+      interaction.options.getString("secenek3"),
+      interaction.options.getString("secenek4"),
+      interaction.options.getString("secenek5")
+    ].filter(Boolean).map(s => s.trim()).filter(Boolean);
+
+    if (optsRaw.length < 2) {
+      return interaction.reply({ content: "❌ En az 2 seçenek gerekli.", ephemeral: true });
+    }
+
+    const emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"];
+    const lines = optsRaw.map((o, i) => `${emojis[i]} ${o}`);
+
+    await interaction.deferReply({ ephemeral: true });
+
+    const msg = await interaction.channel.send({
+      embeds: [
+        new EmbedBuilder()
+          .setTitle("📊 Anket")
+          .setColor(0x5865f2)
+          .setDescription(`**${soru.slice(0, 250)}**\n\n${lines.join("\n")}`)
+          .setFooter({ text: `Anket • ${interaction.user.username} • ${BRAND_FOOTER}` })
+          .setTimestamp()
+      ]
+    });
+
+    for (let i = 0; i < optsRaw.length; i++) {
+      await msg.react(emojis[i]).catch(() => {});
+    }
+
+    return interaction.editReply({ content: `${EMOJI.ok} Anket gönderildi: ${msg.url}` });
+  }
+
+  // ---------- /rastgele ----------
+  if (name === "rastgele") {
+    const members = [...interaction.guild.members.cache.filter(m => !m.user.bot).values()];
+    if (!members.length) {
+      return interaction.reply({ content: "❌ Üye bulunamadı.", ephemeral: true });
+    }
+    const pick = members[Math.floor(Math.random() * members.length)];
+    return interaction.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setTitle("🎲 Rastgele Üye")
+          .setColor(0xfee75c)
+          .setDescription(`${pick}`)
+          .setThumbnail(pick.user.displayAvatarURL())
+          .setFooter({ text: BRAND_FOOTER })
+      ],
+      allowedMentions: { parse: [] }
+    });
+  }
+
+  // ---------- /hesapla ----------
+  if (name === "hesapla") {
+    const expr = interaction.options.getString("islem").trim();
+    // Sadece güvenli matematiksel ifadeler
+    if (!/^[\d\s+\-*/().%,^]+$/.test(expr) || expr.length > 80) {
+      return interaction.reply({
+        content: "❌ Geçersiz ifade. Sadece sayılar ve + - * / ( ) % kullan.",
+        ephemeral: true
+      });
+    }
+    try {
+      const safe = expr.replace(/\^/g, "**").replace(/%/g, "/100*");
+      // eslint-disable-next-line no-new-func
+      const result = Function(`"use strict"; return (${safe})`)();
+      if (!Number.isFinite(result)) throw new Error("NaN");
+      return interaction.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle("🧮 Hesap")
+            .setColor(0x57f287)
+            .addFields(
+              { name: "İşlem", value: `\`${expr}\`` },
+              { name: "Sonuç", value: `**${result}**` }
+            )
+            .setFooter({ text: BRAND_FOOTER })
+        ]
+      });
+    } catch {
+      return interaction.reply({ content: "❌ Hesaplanamadı.", ephemeral: true });
+    }
+  }
+
+  // ---------- /hatirlat ----------
+  if (name === "hatirlat") {
+    const dakika = interaction.options.getInteger("dakika");
+    const not = (interaction.options.getString("not") || "Hatırlatma!").slice(0, 200);
+    if (dakika < 1 || dakika > 10080) {
+      return interaction.reply({ content: "❌ Süre 1 dk – 7 gün arasında olmalı.", ephemeral: true });
+    }
+
+    const id = remindSeq++;
+    const when = Date.now() + dakika * 60 * 1000;
+    const channelId = interaction.channelId;
+    const userId = interaction.user.id;
+    const guildId = interaction.guildId;
+
+    const timer = setTimeout(async () => {
+      remindTimers.delete(id);
+      try {
+        const guild = client.guilds.cache.get(guildId);
+        const channel = guild?.channels.cache.get(channelId);
+        if (channel?.isTextBased()) {
+          await channel.send({
+            content: `⏰ <@${userId}> **Hatırlatma:** ${not}`,
+            allowedMentions: { users: [userId] }
+          });
+        }
+      } catch (e) {
+        console.error("REMIND ERROR:", e.message);
+      }
+    }, dakika * 60 * 1000);
+
+    if (typeof timer.unref === "function") timer.unref();
+    remindTimers.set(id, timer);
+
+    return interaction.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setTitle("⏰ Hatırlatıcı")
+          .setColor(0xfaa61a)
+          .setDescription(`**${not}**\n⏱️ <t:${Math.floor(when / 1000)}:R> seni etiketleyeceğim.`)
+          .setFooter({ text: BRAND_FOOTER })
+      ],
+      ephemeral: true
+    });
+  }
+
+  // ---------- /emojiler ----------
+  if (name === "emojiler") {
+    const emojis = [...interaction.guild.emojis.cache.values()];
+    if (!emojis.length) {
+      return interaction.reply({ content: "📭 Bu sunucuda özel emoji yok.", ephemeral: true });
+    }
+    const staticE = emojis.filter(e => !e.animated).slice(0, 40);
+    const animE = emojis.filter(e => e.animated).slice(0, 20);
+    const embed = new EmbedBuilder()
+      .setTitle(`😀 Emojiler (${emojis.length})`)
+      .setColor(0x5865f2)
+      .setFooter({ text: BRAND_FOOTER });
+    if (staticE.length) {
+      embed.addFields({
+        name: `Statik (${staticE.length})`,
+        value: staticE.map(e => `${e}`).join(" ").slice(0, 1024) || "—"
+      });
+    }
+    if (animE.length) {
+      embed.addFields({
+        name: `Animasyonlu (${animE.length})`,
+        value: animE.map(e => `${e}`).join(" ").slice(0, 1024) || "—"
+      });
+    }
+    return interaction.reply({ embeds: [embed] });
+  }
+
+  // ---------- /ping ----------
+  if (name === "ping") {
+    const sent = await interaction.reply({
+      content: "🏓 Ölçülüyor...",
+      fetchReply: true
+    });
+    const roundtrip = sent.createdTimestamp - interaction.createdTimestamp;
+    return interaction.editReply({
+      content: null,
+      embeds: [
+        new EmbedBuilder()
+          .setTitle("🏓 Ping")
+          .setColor(0x57f287)
+          .addFields(
+            { name: "Bot", value: `**${roundtrip}** ms`, inline: true },
+            { name: "WebSocket", value: `**${Math.round(client.ws.ping)}** ms`, inline: true }
+          )
+          .setFooter({ text: BRAND_FOOTER })
+      ]
+    });
+  }
+
+  // ---------- /say ----------
+  if (name === "say") {
+    if (!hasPermission(interaction, PermissionsBitField.Flags.ManageMessages)) {
+      return interaction.reply({ content: "❌ **Mesajları Yönet** yetkisi gerekir.", ephemeral: true });
+    }
+    const textMsg = interaction.options.getString("mesaj").slice(0, 2000);
+    await interaction.reply({ content: `${EMOJI.ok} Gönderildi.`, ephemeral: true });
+    await interaction.channel.send({ content: textMsg, allowedMentions: { parse: [] } }).catch(() => {});
+    return true;
+  }
+
+  return false;
+}
+
+const UTILITY_COMMANDS = [
+  "afk", "avatar", "kullanici", "sunucu", "snipe", "anket",
+  "rastgele", "hesapla", "hatirlat", "emojiler", "ping", "say"
+];
+
+
+
+commands.push(
+  new SlashCommandBuilder()
+    .setName("afk")
+    .setDescription("AFK moduna geç")
+    .setDMPermission(false)
+    .addStringOption(o => o.setName("sebep").setDescription("AFK sebebi").setMaxLength(200)),
+  new SlashCommandBuilder()
+    .setName("avatar")
+    .setDescription("Avatarını veya birinin avatarını göster")
+    .setDMPermission(false)
+    .addUserOption(o => o.setName("kullanici").setDescription("Kullanıcı")),
+  new SlashCommandBuilder()
+    .setName("kullanici")
+    .setDescription("Kullanıcı bilgilerini göster")
+    .setDMPermission(false)
+    .addUserOption(o => o.setName("kullanici").setDescription("Kullanıcı")),
+  new SlashCommandBuilder()
+    .setName("sunucu")
+    .setDescription("Sunucu bilgilerini göster")
+    .setDMPermission(false),
+  new SlashCommandBuilder()
+    .setName("snipe")
+    .setDescription("Bu kanalda son silinen mesajı göster")
+    .setDMPermission(false),
+  new SlashCommandBuilder()
+    .setName("anket")
+    .setDescription("Anket oluştur (yetkili)")
+    .setDMPermission(false)
+    .setDefaultMemberPermissions(PermissionsBitField.Flags.ManageMessages)
+    .addStringOption(o => o.setName("soru").setDescription("Anket sorusu").setRequired(true).setMaxLength(250))
+    .addStringOption(o => o.setName("secenek1").setDescription("1. seçenek").setRequired(true).setMaxLength(80))
+    .addStringOption(o => o.setName("secenek2").setDescription("2. seçenek").setRequired(true).setMaxLength(80))
+    .addStringOption(o => o.setName("secenek3").setDescription("3. seçenek").setMaxLength(80))
+    .addStringOption(o => o.setName("secenek4").setDescription("4. seçenek").setMaxLength(80))
+    .addStringOption(o => o.setName("secenek5").setDescription("5. seçenek").setMaxLength(80)),
+  new SlashCommandBuilder()
+    .setName("rastgele")
+    .setDescription("Rastgele bir üye seç")
+    .setDMPermission(false),
+  new SlashCommandBuilder()
+    .setName("hesapla")
+    .setDescription("Basit matematik hesabı yap")
+    .setDMPermission(false)
+    .addStringOption(o => o.setName("islem").setDescription("Örn: (12+8)*3").setRequired(true).setMaxLength(80)),
+  new SlashCommandBuilder()
+    .setName("hatirlat")
+    .setDescription("Belirtilen süre sonra hatırlat")
+    .setDMPermission(false)
+    .addIntegerOption(o => o.setName("dakika").setDescription("Kaç dakika sonra (1-10080)").setRequired(true).setMinValue(1).setMaxValue(10080))
+    .addStringOption(o => o.setName("not").setDescription("Hatırlatma notu").setMaxLength(200)),
+  new SlashCommandBuilder()
+    .setName("emojiler")
+    .setDescription("Sunucu emojilerini listele")
+    .setDMPermission(false),
+  new SlashCommandBuilder()
+    .setName("ping")
+    .setDescription("Bot gecikmesini göster")
+    .setDMPermission(false),
+  new SlashCommandBuilder()
+    .setName("say")
+    .setDescription("Bot adına mesaj gönder (yetkili)")
+    .setDMPermission(false)
+    .setDefaultMemberPermissions(PermissionsBitField.Flags.ManageMessages)
+    .addStringOption(o => o.setName("mesaj").setDescription("Gönderilecek mesaj").setRequired(true).setMaxLength(2000))
+);
+
+
+client.on("messageDelete", async (message) => {
+  try {
+    await handleSnipeStore(message);
+  } catch (error) {
+    console.error("SNIPE STORE ERROR:", error);
   }
 });
 
