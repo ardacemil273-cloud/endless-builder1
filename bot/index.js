@@ -6000,9 +6000,9 @@ const HELP_CATEGORIES = [
   { key: "ai", label: "AI", emoji: "🤖", cmds: ["ai", "ai-kanal"] },
   { key: "guvenlik", label: "Güvenlik", emoji: "🔐", cmds: ["antiraid", "automod"] },
   { key: "ayarlar", label: "Ayarlar", emoji: "⚙️", cmds: ["ayarlar", "premium", "yardım"] },
-  { key: "araclar", label: "Araçlar", emoji: "🧰", cmds: ["afk", "avatar", "kullanici", "sunucu", "snipe", "anket", "rastgele", "hesapla", "hatirlat", "emojiler", "ping", "say", "özel-oda-kur"] },
+  { key: "araclar", label: "Araçlar", emoji: "🧰", cmds: ["afk", "avatar", "kullanici", "sunucu", "snipe", "anket", "rastgele", "hesapla", "hatirlat", "emojiler", "ping", "say", "ozel-oda-kur"] },
   { key: "eglence", label: "Eğlence", emoji: "🎉", cmds: ["sarıl", "öp", "tokat", "okşa", "yumruk", "dans", "ship", "8ball", "zar", "yazıtura", "rate", "howgay", "aşkölçer"] },
-  { key: "muzik", label: "Müzik", emoji: "🎵", cmds: ["çal", "durdur", "devam", "geç", "kuyruk", "şimdi", "muzik-ses", "karıştır", "tekrar", "kuyruk-temizle", "çık"] }
+  { key: "muzik", label: "Müzik", emoji: "🎵", cmds: ["muzik"] }
 ];
 
 function helpMenuRow(selected) {
@@ -7034,7 +7034,7 @@ async function handleExtraInteraction(interaction) {
       await handleMusicCommand(interaction);
       return true;
     }
-    if (n === "öneri" || n === "öneri-kanal") {
+    if (n === "öneri" || n === "öneri-kanal" || n === "oneri" || n === "oneri-kanal") {
       await handleOneriCommand(interaction);
       return true;
     }
@@ -7104,34 +7104,10 @@ client.once(
 
       let registered = false;
 
-      const payload = normalizeCommands(commands);
-      console.log(`📋 Kayıt için ${payload.length} komut hazır (ham: ${commands.length}).`);
-      console.log("📋 Komutlar:", payload.map(c => c.name).sort().join(", "));
-
-      // GUILD_ID varsa test sunucusuna hızlı kayıt (anında görünür)
-      if (guildId) {
-        const guild = await client.guilds.fetch(guildId).catch(() => null);
-        if (guild) {
-          await client.application.commands.set(payload, guild.id);
-          registered = true;
-          console.log(`✅ ${payload.length} komut test sunucusuna yüklendi (${guild.name}).`);
-        } else {
-          console.log("⚠️ GUILD_ID'deki sunucu bulunamadı, global kayda geçiliyor.");
-        }
-      }
-
-      // Global kayıt (1 saat kadar sürebilir)
-      if (!registered) {
-        await client.application.commands.set(payload);
-        console.log(`✅ ${payload.length} komut global olarak yüklendi.`);
-      }
-
+      await registerCommandsEverywhere();
     } catch (error) {
       console.error("COMMAND REGISTER ERROR:", error);
       if (error?.rawError) console.error("Discord raw:", JSON.stringify(error.rawError).slice(0, 500));
-      if (error?.code === 50035) {
-        console.error("💡 İpucu: Komut sayısı 100'ü aşıyor veya geçersiz alan var. normalizeCommands kontrol et.");
-      }
     }
 
     // İlk istatistik güncellemesi (yavaş yavaş, rate limit'e takılmadan)
@@ -10357,7 +10333,7 @@ function buildRegRows(targetId, genderEnabled, session) {
 
 commands.push(
   new SlashCommandBuilder()
-    .setName("özel-oda-kur")
+    .setName("ozel-oda-kur")
     .setDescription("Özel oda (secret room) sistemini kur")
     .setDefaultMemberPermissions(PermissionsBitField.Flags.ManageGuild)
     .setDMPermission(false)
@@ -10644,7 +10620,7 @@ client.on("interactionCreate", async (interaction) => {
     // Eğlence + özel oda kur komutları
     if (interaction.isChatInputCommand()) {
       const n = interaction.commandName;
-      if (n === "özel-oda-kur") {
+      if (n === "özel-oda-kur" || n === "ozel-oda-kur") {
         await setupTempVoice(interaction);
         return;
       }
@@ -10684,7 +10660,7 @@ client.on("interactionCreate", async (interaction) => {
         await handleMusicCommand(interaction);
         return;
       }
-      if (n === "öneri" || n === "öneri-kanal") {
+      if (n === "öneri" || n === "öneri-kanal" || n === "oneri" || n === "oneri-kanal") {
         await handleOneriCommand(interaction);
         return;
       }
@@ -11527,14 +11503,14 @@ async function handleMusicCommand(interaction) {
     return interaction.reply({ content: "❌ Sadece sunucuda kullanılabilir.", ephemeral: true });
   }
 
-  const name = interaction.commandName;
+  // /muzik <altkomut>  — eski tekil isimler de desteklenir
+  const sub = interaction.options?.getSubcommand?.(false) || null;
+  const name = sub || interaction.commandName;
   const member = interaction.member;
   const voiceChannel = member?.voice?.channel;
 
-  const needVoice = ["çal", "durdur", "devam", "geç", "çık", "muzik-ses", "karıştır", "tekrar", "kuyruk-temizle", "şimdi"].includes(name);
-
-  // ---------- /çal ----------
-  if (name === "çal") {
+  // ---------- /muzik cal  veya eski /çal ----------
+  if (name === "cal" || name === "çal") {
     if (!voiceChannel) {
       return interaction.reply({ content: "❌ Önce bir ses kanalına gir.", ephemeral: true });
     }
@@ -11620,7 +11596,7 @@ async function handleMusicCommand(interaction) {
   const mq = musicQueues.get(interaction.guildId);
 
   // ---------- /şimdi ----------
-  if (name === "şimdi") {
+  if (name === "simdi" || name === "şimdi") {
     if (!mq?.playing) {
       return interaction.reply({ content: "📭 Şu an çalan şarkı yok.", ephemeral: true });
     }
@@ -11671,7 +11647,7 @@ async function handleMusicCommand(interaction) {
   }
 
   // Ses kanalı kontrolü (yönetim komutları)
-  if (["durdur", "devam", "geç", "çık", "muzik-ses", "karıştır", "tekrar", "kuyruk-temizle"].includes(name)) {
+  if (["durdur", "devam", "geç", "gec", "çık", "cik", "muzik-ses", "ses", "karıştır", "karistir", "tekrar", "kuyruk-temizle", "temizle"].includes(name)) {
     if (!mq?.connection) {
       return interaction.reply({ content: "❌ Bot bir ses kanalında değil.", ephemeral: true });
     }
@@ -11696,25 +11672,25 @@ async function handleMusicCommand(interaction) {
     return interaction.reply({ content: "▶️ Devam ediyor." });
   }
 
-  if (name === "geç") {
+  if (name === "geç" || name === "gec") {
     if (!mq?.playing) return interaction.reply({ content: "❌ Çalan şarkı yok.", ephemeral: true });
     mq.player.stop(true);
     return interaction.reply({ content: "⏭️ Sonraki parçaya geçildi." });
   }
 
-  if (name === "çık") {
+  if (name === "çık" || name === "cik") {
     mq?.destroy();
     return interaction.reply({ content: "👋 Ses kanalından ayrıldım, kuyruk temizlendi." });
   }
 
-  if (name === "muzik-ses") {
+  if (name === "muzik-ses" || name === "ses") {
     const vol = interaction.options.getInteger("seviye");
     if (!mq) return interaction.reply({ content: "❌ Aktif müzik yok.", ephemeral: true });
     mq.setVolume(vol);
     return interaction.reply({ content: `🔊 Ses seviyesi **%${mq.volume}**` });
   }
 
-  if (name === "karıştır") {
+  if (name === "karıştır" || name === "karistir") {
     if (!mq || mq.queue.length < 2) {
       return interaction.reply({ content: "❌ Karıştırmak için kuyrukta en az 2 şarkı olmalı.", ephemeral: true });
     }
@@ -11733,7 +11709,7 @@ async function handleMusicCommand(interaction) {
     return interaction.reply({ content: `🔁 Döngü: **${labels[mode] || mode}**` });
   }
 
-  if (name === "kuyruk-temizle") {
+  if (name === "kuyruk-temizle" || name === "temizle") {
     if (!mq) return interaction.reply({ content: "❌ Kuyruk zaten boş.", ephemeral: true });
     mq.queue = [];
     return interaction.reply({ content: "🧹 Kuyruk temizlendi (çalan şarkı duruyor)." });
@@ -11784,10 +11760,7 @@ async function handleMusicButton(interaction) {
   return false;
 }
 
-const MUSIC_COMMANDS = [
-  "çal", "durdur", "devam", "geç", "kuyruk", "çık",
-  "muzik-ses", "şimdi", "karıştır", "tekrar", "kuyruk-temizle"
-];
+const MUSIC_COMMANDS = ["muzik"];
 
 // ======================================================
 // ÖNERİ SİSTEMİ + BOT DURUMU
@@ -11797,7 +11770,7 @@ async function handleOneriCommand(interaction) {
   const config = getServerConfig(interaction.guildId);
   config.suggestions ??= { channelId: null, count: 0 };
 
-  if (interaction.commandName === "öneri-kanal") {
+  if (interaction.commandName === "öneri-kanal" || interaction.commandName === "oneri-kanal") {
     if (!hasPermission(interaction, PermissionsBitField.Flags.ManageGuild)) {
       return interaction.reply({ content: "❌ **Sunucuyu Yönet** yetkisi gerekir.", ephemeral: true });
     }
@@ -11807,7 +11780,7 @@ async function handleOneriCommand(interaction) {
     return interaction.reply({ content: `✅ Öneri kanalı ${ch} olarak ayarlandı.`, ephemeral: true });
   }
 
-  if (interaction.commandName === "öneri") {
+  if (interaction.commandName === "öneri" || interaction.commandName === "oneri") {
     const text = interaction.options.getString("metin")?.trim();
     if (!text || text.length < 5) {
       return interaction.reply({ content: "❌ Öneri en az 5 karakter olmalı.", ephemeral: true });
@@ -11880,42 +11853,46 @@ function startPresenceRotation() {
 
 commands.push(
   new SlashCommandBuilder()
-    .setName("çal")
-    .setDescription("Şarkı çal / kuyruğa ekle (YouTube adı veya URL)")
+    .setName("muzik")
+    .setDescription("Müzik sistemi")
     .setDMPermission(false)
-    .addStringOption(o => o.setName("sarki").setDescription("Şarkı adı veya YouTube linki").setRequired(true).setMaxLength(200)),
-  new SlashCommandBuilder().setName("durdur").setDescription("Müziği duraklat").setDMPermission(false),
-  new SlashCommandBuilder().setName("devam").setDescription("Müziği devam ettir").setDMPermission(false),
-  new SlashCommandBuilder().setName("geç").setDescription("Sıradaki şarkıya geç").setDMPermission(false),
-  new SlashCommandBuilder().setName("kuyruk").setDescription("Müzik kuyruğunu göster").setDMPermission(false),
-  new SlashCommandBuilder().setName("şimdi").setDescription("Şu an çalan şarkıyı göster").setDMPermission(false),
-  new SlashCommandBuilder().setName("çık").setDescription("Ses kanalından ayrıl ve kuyruğu temizle").setDMPermission(false),
-  new SlashCommandBuilder()
-    .setName("muzik-ses")
-    .setDescription("Müzik ses seviyesini ayarla")
-    .setDMPermission(false)
-    .addIntegerOption(o => o.setName("seviye").setDescription("1-150").setRequired(true).setMinValue(1).setMaxValue(150)),
-  new SlashCommandBuilder().setName("karıştır").setDescription("Kuyruğu karıştır").setDMPermission(false),
-  new SlashCommandBuilder()
-    .setName("tekrar")
-    .setDescription("Döngü modunu ayarla")
-    .setDMPermission(false)
-    .addStringOption(o =>
-      o.setName("mod").setDescription("Döngü").setRequired(true)
-        .addChoices(
-          { name: "Kapalı", value: "off" },
-          { name: "Parça tekrarı", value: "track" },
-          { name: "Kuyruk tekrarı", value: "queue" }
+    .addSubcommand(s =>
+      s.setName("cal")
+        .setDescription("Şarkı çal / kuyruğa ekle")
+        .addStringOption(o => o.setName("sarki").setDescription("Şarkı adı veya YouTube linki").setRequired(true).setMaxLength(200))
+    )
+    .addSubcommand(s => s.setName("durdur").setDescription("Müziği duraklat"))
+    .addSubcommand(s => s.setName("devam").setDescription("Müziği devam ettir"))
+    .addSubcommand(s => s.setName("gec").setDescription("Sıradaki şarkıya geç"))
+    .addSubcommand(s => s.setName("kuyruk").setDescription("Müzik kuyruğunu göster"))
+    .addSubcommand(s => s.setName("simdi").setDescription("Şu an çalan şarkı"))
+    .addSubcommand(s => s.setName("cik").setDescription("Ses kanalından ayrıl"))
+    .addSubcommand(s =>
+      s.setName("ses")
+        .setDescription("Ses seviyesi (1-150)")
+        .addIntegerOption(o => o.setName("seviye").setDescription("1-150").setRequired(true).setMinValue(1).setMaxValue(150))
+    )
+    .addSubcommand(s => s.setName("karistir").setDescription("Kuyruğu karıştır"))
+    .addSubcommand(s =>
+      s.setName("tekrar")
+        .setDescription("Döngü modu")
+        .addStringOption(o =>
+          o.setName("mod").setDescription("Mod").setRequired(true)
+            .addChoices(
+              { name: "Kapalı", value: "off" },
+              { name: "Parça", value: "track" },
+              { name: "Kuyruk", value: "queue" }
+            )
         )
-    ),
-  new SlashCommandBuilder().setName("kuyruk-temizle").setDescription("Kuyruğu temizle (çalan kalsın)").setDMPermission(false),
+    )
+    .addSubcommand(s => s.setName("temizle").setDescription("Kuyruğu temizle")),
   new SlashCommandBuilder()
-    .setName("öneri")
+    .setName("oneri")
     .setDescription("Sunucuya öneri gönder")
     .setDMPermission(false)
     .addStringOption(o => o.setName("metin").setDescription("Önerin").setRequired(true).setMaxLength(1000)),
   new SlashCommandBuilder()
-    .setName("öneri-kanal")
+    .setName("oneri-kanal")
     .setDescription("Öneri kanalını ayarla (yetkili)")
     .setDMPermission(false)
     .setDefaultMemberPermissions(PermissionsBitField.Flags.ManageGuild)
@@ -11936,16 +11913,89 @@ function normalizeCommands(list) {
       continue;
     }
     if (!data?.name) continue;
-    // Son eklenen aynı ismi ezer (güncel tanım kalsın)
+    // Discord: sadece küçük harf, uzunluk 1-32
+    data.name = String(data.name).toLowerCase();
     byName.set(data.name, data);
   }
-  let out = [...byName.values()];
+
+  // Öncelikli komutlar asla kesilmesin
+  const priority = [
+    "setup", "yardım", "muzik", "ozel-oda-kur", "ticket-panel", "kayit", "bakiye",
+    "rank", "cekilis", "afk", "ping", "ayarlar", "automod", "antiraid"
+  ];
+  const rest = [...byName.values()].filter(c => !priority.includes(c.name));
+  const pri = priority.map(n => byName.get(n)).filter(Boolean);
+  let out = [...pri, ...rest];
+  // Tekrar unique
+  const seen = new Set();
+  out = out.filter(c => {
+    if (seen.has(c.name)) return false;
+    seen.add(c.name);
+    return true;
+  });
   if (out.length > 100) {
-    console.warn(`⚠️ ${out.length} komut var; Discord limiti 100. Fazlalık kesiliyor.`);
+    console.warn(`⚠️ ${out.length} komut var; Discord limiti 100. Öncelikli olanlar korundu.`);
     out = out.slice(0, 100);
   }
   return out;
 }
+
+async function registerCommandsEverywhere() {
+  const payload = normalizeCommands(commands);
+  console.log(`📋 Kayıt: ${payload.length} komut`);
+  console.log("📋 İsimler:", payload.map(c => c.name).sort().join(", "));
+
+  // 1) GUILD_ID varsa oraya
+  const guildId = process.env.GUILD_ID;
+  let any = false;
+  if (guildId) {
+    try {
+      const guild = await client.guilds.fetch(guildId);
+      await client.application.commands.set(payload, guild.id);
+      console.log(`✅ ${payload.length} komut → test sunucu: ${guild.name}`);
+      any = true;
+    } catch (e) {
+      console.error("GUILD_ID kayıt hatası:", e.message);
+    }
+  }
+
+  // 2) Botun bulunduğu TÜM sunuculara anında kaydet (slash hemen görünür)
+  for (const guild of client.guilds.cache.values()) {
+    if (guildId && guild.id === guildId) continue;
+    try {
+      await client.application.commands.set(payload, guild.id);
+      console.log(`✅ ${payload.length} komut → ${guild.name}`);
+      any = true;
+    } catch (e) {
+      console.error(`❌ ${guild.name} kayıt hatası:`, e.message);
+      if (e.rawError) console.error(JSON.stringify(e.rawError).slice(0, 400));
+    }
+  }
+
+  // 3) Global (yedek, yayılması 1 saate kadar sürebilir)
+  try {
+    await client.application.commands.set(payload);
+    console.log(`✅ ${payload.length} komut global kayda alındı`);
+  } catch (e) {
+    console.error("Global kayıt hatası:", e.message);
+    if (e.rawError) console.error(JSON.stringify(e.rawError).slice(0, 400));
+  }
+
+  if (!any && !client.guilds.cache.size) {
+    console.warn("⚠️ Bot henüz hiç sunucuda değil; davet ettikten sonra yeniden başlat.");
+  }
+}
+
+
+client.on("guildCreate", async guild => {
+  try {
+    const payload = normalizeCommands(commands);
+    await client.application.commands.set(payload, guild.id);
+    console.log(`✅ Yeni sunucuya komutlar yüklendi: ${guild.name}`);
+  } catch (e) {
+    console.error("guildCreate komut kayıt hatası:", e.message);
+  }
+});
 
 // ======================================================
 // LOGIN
