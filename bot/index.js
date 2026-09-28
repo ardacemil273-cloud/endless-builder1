@@ -2797,10 +2797,10 @@ const commands = [
         .setRequired(true)
     )
 
-].map(
-  command =>
-    command.toJSON()
-);
+];
+// NOT: toJSON burada yapılmaz — sonra commands.push ile eklenen builder'lar bozulur.
+// Kayıt anında normalizeCommands() ile JSON'a çevrilir.
+
 
 // ======================================================
 // LEVEL SYSTEM
@@ -6001,7 +6001,8 @@ const HELP_CATEGORIES = [
   { key: "guvenlik", label: "Güvenlik", emoji: "🔐", cmds: ["antiraid", "automod"] },
   { key: "ayarlar", label: "Ayarlar", emoji: "⚙️", cmds: ["ayarlar", "premium", "yardım"] },
   { key: "araclar", label: "Araçlar", emoji: "🧰", cmds: ["afk", "avatar", "kullanici", "sunucu", "snipe", "anket", "rastgele", "hesapla", "hatirlat", "emojiler", "ping", "say", "özel-oda-kur"] },
-  { key: "eglence", label: "Eğlence", emoji: "🎉", cmds: ["sarıl", "öp", "tokat", "okşa", "yumruk", "dans", "ship", "8ball", "zar", "yazıtura", "rate", "howgay", "aşkölçer"] }
+  { key: "eglence", label: "Eğlence", emoji: "🎉", cmds: ["sarıl", "öp", "tokat", "okşa", "yumruk", "dans", "ship", "8ball", "zar", "yazıtura", "rate", "howgay", "aşkölçer"] },
+  { key: "muzik", label: "Müzik", emoji: "🎵", cmds: ["çal", "durdur", "devam", "geç", "kuyruk", "şimdi", "muzik-ses", "karıştır", "tekrar", "kuyruk-temizle", "çık"] }
 ];
 
 function helpMenuRow(selected) {
@@ -6036,7 +6037,10 @@ function helpHome() {
 function helpCategory(key) {
   const cat = HELP_CATEGORIES.find(c => c.key === key) || HELP_CATEGORIES[0];
   const lines = cat.cmds
-    .map(n => commands.find(c => c.name === n))
+    .map(n => {
+      const c = commands.find(x => x && x.name === n);
+      return c && typeof c.toJSON === "function" ? c.toJSON() : c;
+    })
     .filter(Boolean)
     .map(c => `**/${c.name}** — ${c.description}`);
   return {
@@ -7026,6 +7030,14 @@ async function handleExtraInteraction(interaction) {
       await handleUtilityCommand(interaction);
       return true;
     }
+    if (typeof MUSIC_COMMANDS !== "undefined" && MUSIC_COMMANDS.includes(n)) {
+      await handleMusicCommand(interaction);
+      return true;
+    }
+    if (n === "öneri" || n === "öneri-kanal") {
+      await handleOneriCommand(interaction);
+      return true;
+    }
     if (n === "automod") { await handleAutoModCommand(interaction); return true; }
     if (n === "antiraid") { await handleAntiRaidCommand(interaction); return true; }
     if (n === "ai" || n === "ai-kanal") { await handleAiCommand(interaction); return true; }
@@ -7092,53 +7104,34 @@ client.once(
 
       let registered = false;
 
-      // GUILD_ID varsa test sunucusuna hızlı kayıt
+      const payload = normalizeCommands(commands);
+      console.log(`📋 Kayıt için ${payload.length} komut hazır (ham: ${commands.length}).`);
+      console.log("📋 Komutlar:", payload.map(c => c.name).sort().join(", "));
+
+      // GUILD_ID varsa test sunucusuna hızlı kayıt (anında görünür)
       if (guildId) {
-
-        const guild =
-          await client.guilds
-            .fetch(guildId)
-            .catch(() => null);
-
+        const guild = await client.guilds.fetch(guildId).catch(() => null);
         if (guild) {
-
-          await client.application.commands.set(
-            commands,
-            guild.id
-          );
-
+          await client.application.commands.set(payload, guild.id);
           registered = true;
-
-          console.log(
-            `✅ ${commands.length} komut test sunucusuna yüklendi.`
-          );
-
+          console.log(`✅ ${payload.length} komut test sunucusuna yüklendi (${guild.name}).`);
         } else {
-
-          console.log(
-            "⚠️ GUILD_ID'deki sunucu bulunamadı, global kayda geçiliyor."
-          );
+          console.log("⚠️ GUILD_ID'deki sunucu bulunamadı, global kayda geçiliyor.");
         }
       }
 
-      // GUILD_ID yoksa global kayıt (public bot)
+      // Global kayıt (1 saat kadar sürebilir)
       if (!registered) {
-
-        await client.application.commands.set(
-          commands
-        );
-
-        console.log(
-          `✅ ${commands.length} komut global olarak yüklendi.`
-        );
+        await client.application.commands.set(payload);
+        console.log(`✅ ${payload.length} komut global olarak yüklendi.`);
       }
 
     } catch (error) {
-
-      console.error(
-        "COMMAND REGISTER ERROR:",
-        error
-      );
+      console.error("COMMAND REGISTER ERROR:", error);
+      if (error?.rawError) console.error("Discord raw:", JSON.stringify(error.rawError).slice(0, 500));
+      if (error?.code === 50035) {
+        console.error("💡 İpucu: Komut sayısı 100'ü aşıyor veya geçersiz alan var. normalizeCommands kontrol et.");
+      }
     }
 
     // İlk istatistik güncellemesi (yavaş yavaş, rate limit'e takılmadan)
@@ -10616,10 +10609,16 @@ setInterval(() => {
 client.on("interactionCreate", async (interaction) => {
   try {
     if (!interaction.guild) return;
+    // Ana handler zaten cevapladıysa tekrar işleme (çift dinleyici güvenliği)
+    if (interaction.replied || interaction.deferred) return;
 
     // Özel oda buton / modal / select
     if (interaction.isButton() && interaction.customId.startsWith("eb_tv_")) {
       await handleTempVoiceButton(interaction);
+      return;
+    }
+    if (interaction.isButton() && interaction.customId.startsWith("eb_m_")) {
+      await handleMusicButton(interaction);
       return;
     }
     if (interaction.isModalSubmit() && interaction.customId.startsWith("eb_tv_")) {
@@ -10679,6 +10678,14 @@ client.on("interactionCreate", async (interaction) => {
       }
       if (UTILITY_COMMANDS.includes(n)) {
         await handleUtilityCommand(interaction);
+        return;
+      }
+      if (typeof MUSIC_COMMANDS !== "undefined" && MUSIC_COMMANDS.includes(n)) {
+        await handleMusicCommand(interaction);
+        return;
+      }
+      if (n === "öneri" || n === "öneri-kanal") {
+        await handleOneriCommand(interaction);
         return;
       }
       if (n === "kayitsizlar") {
@@ -11247,6 +11254,698 @@ client.on("messageDelete", async (message) => {
     console.error("SNIPE STORE ERROR:", error);
   }
 });
+
+
+// ======================================================
+// MÜZİK SİSTEMİ (@discordjs/voice + play-dl)
+// Bağımlılıklar: npm i @discordjs/voice play-dl opusscript
+// Sunucuda FFmpeg kurulu olmalı (apt install ffmpeg)
+// ======================================================
+
+let voiceLib = null;
+let playdl = null;
+let musicDepsOk = false;
+
+try {
+  voiceLib = require("@discordjs/voice");
+  playdl = require("play-dl");
+  musicDepsOk = true;
+  console.log("✅ Müzik bağımlılıkları yüklendi.");
+} catch (e) {
+  console.warn(
+    "⚠️ Müzik sistemi kapalı. Kurulum: npm i @discordjs/voice play-dl opusscript  |  FFmpeg gerekli."
+  );
+}
+
+/** @type {Map<string, GuildMusic>} */
+const musicQueues = new Map();
+
+class GuildMusic {
+  constructor(guildId) {
+    this.guildId = guildId;
+    this.queue = [];
+    this.playing = null;
+    this.textChannelId = null;
+    this.volume = 80;
+    this.loop = "off"; // off | track | queue
+    this.player = null;
+    this.connection = null;
+    this.paused = false;
+    this.skipVotes = new Set();
+  }
+
+  ensurePlayer() {
+    if (this.player) return this.player;
+    const { createAudioPlayer, AudioPlayerStatus, NoSubscriberBehavior } = voiceLib;
+    this.player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Play } });
+
+    this.player.on(AudioPlayerStatus.Idle, () => {
+      this._onTrackEnd().catch(err => console.error("MUSIC IDLE ERROR:", err));
+    });
+    this.player.on("error", err => {
+      console.error("MUSIC PLAYER ERROR:", err.message);
+      this._onTrackEnd().catch(() => {});
+    });
+    return this.player;
+  }
+
+  async connect(voiceChannel) {
+    const {
+      joinVoiceChannel,
+      entersState,
+      VoiceConnectionStatus
+    } = voiceLib;
+
+    if (this.connection) {
+      try {
+        this.connection.destroy();
+      } catch {}
+      this.connection = null;
+    }
+
+    this.connection = joinVoiceChannel({
+      channelId: voiceChannel.id,
+      guildId: voiceChannel.guild.id,
+      adapterCreator: voiceChannel.guild.voiceAdapterCreator,
+      selfDeaf: true
+    });
+
+    this.connection.on("error", err => console.error("VOICE CONN ERROR:", err.message));
+
+    await entersState(this.connection, VoiceConnectionStatus.Ready, 20_000);
+    this.connection.subscribe(this.ensurePlayer());
+    return this.connection;
+  }
+
+  async _onTrackEnd() {
+    if (this.loop === "track" && this.playing) {
+      this.queue.unshift(this.playing);
+    } else if (this.loop === "queue" && this.playing) {
+      this.queue.push(this.playing);
+    }
+    this.playing = null;
+    this.skipVotes.clear();
+    await this.playNext();
+  }
+
+  async playNext() {
+    if (!this.queue.length) {
+      this.playing = null;
+      // 60 sn boşsa çık
+      setTimeout(() => {
+        if (!this.playing && !this.queue.length && this.connection) {
+          try { this.connection.destroy(); } catch {}
+          this.connection = null;
+          musicQueues.delete(this.guildId);
+        }
+      }, 60_000).unref?.();
+      return;
+    }
+
+    const track = this.queue.shift();
+    this.playing = track;
+    this.paused = false;
+    this.skipVotes.clear();
+
+    try {
+      const { createAudioResource, StreamType } = voiceLib;
+      let streamInfo;
+      if (track.source === "yt" || track.url.includes("youtu")) {
+        streamInfo = await playdl.stream(track.url, { quality: 2 });
+      } else {
+        streamInfo = await playdl.stream(track.url);
+      }
+
+      const resource = createAudioResource(streamInfo.stream, {
+        inputType: streamInfo.type,
+        inlineVolume: true
+      });
+      resource.volume?.setVolume(this.volume / 100);
+      this._resource = resource;
+      this.ensurePlayer().play(resource);
+
+      const ch = track.guild?.channels?.cache?.get(this.textChannelId);
+      if (ch?.isTextBased?.()) {
+        await ch.send({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("🎵 Çalıyor")
+              .setColor(0x1db954)
+              .setDescription(`**[${track.title}](${track.url})**`)
+              .addFields(
+                { name: "Süre", value: track.duration || "—", inline: true },
+                { name: "İsteyen", value: track.requestedBy ? `<@${track.requestedBy}>` : "—", inline: true },
+                { name: "Kuyruk", value: String(this.queue.length), inline: true }
+              )
+              .setThumbnail(track.thumbnail || null)
+              .setFooter({ text: BRAND_FOOTER })
+          ]
+        }).catch(() => {});
+      }
+    } catch (error) {
+      console.error("MUSIC PLAY ERROR:", error.message);
+      const ch = track.guild?.channels?.cache?.get(this.textChannelId);
+      if (ch?.isTextBased?.()) {
+        await ch.send(`❌ **${track.title}** çalınamadı, sıradakine geçiliyor.`).catch(() => {});
+      }
+      this.playing = null;
+      await this.playNext();
+    }
+  }
+
+  setVolume(v) {
+    this.volume = Math.max(1, Math.min(150, v));
+    if (this._resource?.volume) this._resource.volume.setVolume(this.volume / 100);
+  }
+
+  destroy() {
+    try { this.player?.stop(true); } catch {}
+    try { this.connection?.destroy(); } catch {}
+    this.queue = [];
+    this.playing = null;
+    this.connection = null;
+    this.player = null;
+    musicQueues.delete(this.guildId);
+  }
+}
+
+function getMusic(guildId) {
+  let q = musicQueues.get(guildId);
+  if (!q) {
+    q = new GuildMusic(guildId);
+    musicQueues.set(guildId, q);
+  }
+  return q;
+}
+
+function formatDurationSec(sec) {
+  if (!sec || !Number.isFinite(sec)) return "—";
+  const s = Math.floor(sec);
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  const h = Math.floor(m / 60);
+  if (h > 0) return `${h}:${String(m % 60).padStart(2, "0")}:${String(r).padStart(2, "0")}`;
+  return `${m}:${String(r).padStart(2, "0")}`;
+}
+
+async function resolveTracks(query, requestedBy, guild) {
+  const tracks = [];
+
+  // URL?
+  if (playdl.yt_validate(query) === "video" || /youtu(\.be|be\.com)/i.test(query)) {
+    const info = await playdl.video_info(query);
+    const v = info.video_details;
+    tracks.push({
+      title: v.title || "YouTube",
+      url: v.url,
+      duration: formatDurationSec(Number(v.durationInSec)),
+      thumbnail: v.thumbnails?.[0]?.url || null,
+      source: "yt",
+      requestedBy,
+      guild
+    });
+    return tracks;
+  }
+
+  if (playdl.yt_validate(query) === "playlist") {
+    const pl = await playdl.playlist_info(query, { incomplete: true });
+    const videos = await pl.all_videos();
+    for (const v of videos.slice(0, 50)) {
+      tracks.push({
+        title: v.title || "YouTube",
+        url: v.url,
+        duration: formatDurationSec(Number(v.durationInSec)),
+        thumbnail: v.thumbnails?.[0]?.url || null,
+        source: "yt",
+        requestedBy,
+        guild
+      });
+    }
+    return tracks;
+  }
+
+  // Arama
+  const results = await playdl.search(query, { limit: 1, source: { youtube: "video" } });
+  if (!results?.length) return [];
+  const v = results[0];
+  tracks.push({
+    title: v.title || query,
+    url: v.url,
+    duration: formatDurationSec(Number(v.durationInSec)),
+    thumbnail: v.thumbnails?.[0]?.url || null,
+    source: "yt",
+    requestedBy,
+    guild
+  });
+  return tracks;
+}
+
+function musicPanelRow(disabled = false) {
+  return [
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId("eb_m_pause").setEmoji("⏸️").setStyle(ButtonStyle.Secondary).setDisabled(disabled),
+      new ButtonBuilder().setCustomId("eb_m_resume").setEmoji("▶️").setStyle(ButtonStyle.Success).setDisabled(disabled),
+      new ButtonBuilder().setCustomId("eb_m_skip").setEmoji("⏭️").setStyle(ButtonStyle.Primary).setDisabled(disabled),
+      new ButtonBuilder().setCustomId("eb_m_stop").setEmoji("⏹️").setStyle(ButtonStyle.Danger).setDisabled(disabled),
+      new ButtonBuilder().setCustomId("eb_m_loop").setEmoji("🔁").setStyle(ButtonStyle.Secondary).setDisabled(disabled)
+    )
+  ];
+}
+
+async function handleMusicCommand(interaction) {
+  if (!musicDepsOk) {
+    return interaction.reply({
+      content:
+        "❌ Müzik sistemi için paketler eksik.\n" +
+        "```bash\nnpm i @discordjs/voice play-dl opusscript\n```\n" +
+        "Ayrıca sunucuda **FFmpeg** kurulu olmalı.",
+      ephemeral: true
+    });
+  }
+
+  if (!interaction.guild) {
+    return interaction.reply({ content: "❌ Sadece sunucuda kullanılabilir.", ephemeral: true });
+  }
+
+  const name = interaction.commandName;
+  const member = interaction.member;
+  const voiceChannel = member?.voice?.channel;
+
+  const needVoice = ["çal", "durdur", "devam", "geç", "çık", "muzik-ses", "karıştır", "tekrar", "kuyruk-temizle", "şimdi"].includes(name);
+
+  // ---------- /çal ----------
+  if (name === "çal") {
+    if (!voiceChannel) {
+      return interaction.reply({ content: "❌ Önce bir ses kanalına gir.", ephemeral: true });
+    }
+    const me = interaction.guild.members.me;
+    const perms = voiceChannel.permissionsFor(me);
+    if (!perms?.has(PermissionsBitField.Flags.Connect) || !perms?.has(PermissionsBitField.Flags.Speak)) {
+      return interaction.reply({ content: "❌ Bu ses kanalında **Bağlan** / **Konuş** yetkim yok.", ephemeral: true });
+    }
+
+    const query = interaction.options.getString("sarki")?.trim();
+    if (!query) {
+      return interaction.reply({ content: "❌ Şarkı adı veya URL gir.", ephemeral: true });
+    }
+
+    await interaction.deferReply();
+
+    let tracks;
+    try {
+      tracks = await resolveTracks(query, interaction.user.id, interaction.guild);
+    } catch (e) {
+      console.error("RESOLVE ERROR:", e.message);
+      return interaction.editReply({ content: `❌ Arama/yükleme hatası: \`${e.message.slice(0, 100)}\`` });
+    }
+
+    if (!tracks.length) {
+      return interaction.editReply({ content: "❌ Sonuç bulunamadı." });
+    }
+
+    const mq = getMusic(interaction.guildId);
+    mq.textChannelId = interaction.channelId;
+
+    try {
+      if (!mq.connection) await mq.connect(voiceChannel);
+      else if (mq.connection.joinConfig.channelId !== voiceChannel.id) {
+        await mq.connect(voiceChannel);
+      }
+    } catch (e) {
+      console.error("CONNECT ERROR:", e.message);
+      return interaction.editReply({ content: `❌ Ses kanalına bağlanılamadı: \`${e.message.slice(0, 80)}\`` });
+    }
+
+    const wasEmpty = !mq.playing && !mq.queue.length;
+    mq.queue.push(...tracks);
+
+    if (wasEmpty) {
+      await mq.playNext();
+      const t = mq.playing || tracks[0];
+      return interaction.editReply({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle("🎶 Müzik Başladı")
+            .setColor(0x1db954)
+            .setDescription(`**[${t.title}](${t.url})**`)
+            .addFields(
+              { name: "Süre", value: t.duration || "—", inline: true },
+              { name: "Eklenen", value: String(tracks.length), inline: true },
+              { name: "Ses", value: `%${mq.volume}`, inline: true }
+            )
+            .setThumbnail(t.thumbnail || null)
+            .setFooter({ text: BRAND_FOOTER })
+        ],
+        components: musicPanelRow()
+      });
+    }
+
+    return interaction.editReply({
+      embeds: [
+        new EmbedBuilder()
+          .setTitle("➕ Kuyruğa Eklendi")
+          .setColor(0x5865f2)
+          .setDescription(
+            tracks.length === 1
+              ? `**[${tracks[0].title}](${tracks[0].url})**`
+              : `**${tracks.length}** parça kuyruğa eklendi.\nİlk: **${tracks[0].title}**`
+          )
+          .addFields({ name: "Kuyruk uzunluğu", value: String(mq.queue.length + (mq.playing ? 1 : 0)), inline: true })
+          .setThumbnail(tracks[0].thumbnail || null)
+          .setFooter({ text: BRAND_FOOTER })
+      ]
+    });
+  }
+
+  const mq = musicQueues.get(interaction.guildId);
+
+  // ---------- /şimdi ----------
+  if (name === "şimdi") {
+    if (!mq?.playing) {
+      return interaction.reply({ content: "📭 Şu an çalan şarkı yok.", ephemeral: true });
+    }
+    const t = mq.playing;
+    return interaction.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setTitle(mq.paused ? "⏸️ Duraklatıldı" : "🎵 Şimdi Çalıyor")
+          .setColor(0x1db954)
+          .setDescription(`**[${t.title}](${t.url})**`)
+          .addFields(
+            { name: "Süre", value: t.duration || "—", inline: true },
+            { name: "İsteyen", value: t.requestedBy ? `<@${t.requestedBy}>` : "—", inline: true },
+            { name: "Ses", value: `%${mq.volume}`, inline: true },
+            { name: "Döngü", value: mq.loop === "off" ? "Kapalı" : mq.loop === "track" ? "Parça" : "Kuyruk", inline: true },
+            { name: "Kuyruk", value: String(mq.queue.length), inline: true }
+          )
+          .setThumbnail(t.thumbnail || null)
+          .setFooter({ text: BRAND_FOOTER })
+      ],
+      components: musicPanelRow()
+    });
+  }
+
+  // ---------- /kuyruk ----------
+  if (name === "kuyruk") {
+    if (!mq || (!mq.playing && !mq.queue.length)) {
+      return interaction.reply({ content: "📭 Kuyruk boş.", ephemeral: true });
+    }
+    const lines = [];
+    if (mq.playing) {
+      lines.push(`**Çalıyor:** [${mq.playing.title}](${mq.playing.url}) \`${mq.playing.duration || "?"}\``);
+    }
+    mq.queue.slice(0, 15).forEach((t, i) => {
+      lines.push(`**${i + 1}.** [${t.title}](${t.url}) \`${t.duration || "?"}\``);
+    });
+    if (mq.queue.length > 15) lines.push(`\n... ve **${mq.queue.length - 15}** parça daha`);
+
+    return interaction.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setTitle("📜 Kuyruk")
+          .setColor(0x5865f2)
+          .setDescription(lines.join("\n").slice(0, 4000))
+          .setFooter({ text: `Toplam: ${(mq.playing ? 1 : 0) + mq.queue.length} • Döngü: ${mq.loop} • ${BRAND_FOOTER}` })
+      ]
+    });
+  }
+
+  // Ses kanalı kontrolü (yönetim komutları)
+  if (["durdur", "devam", "geç", "çık", "muzik-ses", "karıştır", "tekrar", "kuyruk-temizle"].includes(name)) {
+    if (!mq?.connection) {
+      return interaction.reply({ content: "❌ Bot bir ses kanalında değil.", ephemeral: true });
+    }
+    if (!voiceChannel || voiceChannel.id !== mq.connection.joinConfig.channelId) {
+      if (!isAdmin(interaction)) {
+        return interaction.reply({ content: "❌ Bot ile aynı ses kanalında olmalısın.", ephemeral: true });
+      }
+    }
+  }
+
+  if (name === "durdur") {
+    if (!mq?.playing) return interaction.reply({ content: "❌ Çalan şarkı yok.", ephemeral: true });
+    mq.player.pause();
+    mq.paused = true;
+    return interaction.reply({ content: "⏸️ Duraklatıldı." });
+  }
+
+  if (name === "devam") {
+    if (!mq?.playing) return interaction.reply({ content: "❌ Çalan şarkı yok.", ephemeral: true });
+    mq.player.unpause();
+    mq.paused = false;
+    return interaction.reply({ content: "▶️ Devam ediyor." });
+  }
+
+  if (name === "geç") {
+    if (!mq?.playing) return interaction.reply({ content: "❌ Çalan şarkı yok.", ephemeral: true });
+    mq.player.stop(true);
+    return interaction.reply({ content: "⏭️ Sonraki parçaya geçildi." });
+  }
+
+  if (name === "çık") {
+    mq?.destroy();
+    return interaction.reply({ content: "👋 Ses kanalından ayrıldım, kuyruk temizlendi." });
+  }
+
+  if (name === "muzik-ses") {
+    const vol = interaction.options.getInteger("seviye");
+    if (!mq) return interaction.reply({ content: "❌ Aktif müzik yok.", ephemeral: true });
+    mq.setVolume(vol);
+    return interaction.reply({ content: `🔊 Ses seviyesi **%${mq.volume}**` });
+  }
+
+  if (name === "karıştır") {
+    if (!mq || mq.queue.length < 2) {
+      return interaction.reply({ content: "❌ Karıştırmak için kuyrukta en az 2 şarkı olmalı.", ephemeral: true });
+    }
+    for (let i = mq.queue.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [mq.queue[i], mq.queue[j]] = [mq.queue[j], mq.queue[i]];
+    }
+    return interaction.reply({ content: "🔀 Kuyruk karıştırıldı." });
+  }
+
+  if (name === "tekrar") {
+    if (!mq) return interaction.reply({ content: "❌ Aktif müzik yok.", ephemeral: true });
+    const mode = interaction.options.getString("mod") || "off";
+    mq.loop = mode;
+    const labels = { off: "Kapalı", track: "Parça tekrarı", queue: "Kuyruk tekrarı" };
+    return interaction.reply({ content: `🔁 Döngü: **${labels[mode] || mode}**` });
+  }
+
+  if (name === "kuyruk-temizle") {
+    if (!mq) return interaction.reply({ content: "❌ Kuyruk zaten boş.", ephemeral: true });
+    mq.queue = [];
+    return interaction.reply({ content: "🧹 Kuyruk temizlendi (çalan şarkı duruyor)." });
+  }
+
+  return false;
+}
+
+async function handleMusicButton(interaction) {
+  if (!musicDepsOk) {
+    return interaction.reply({ content: "❌ Müzik paketleri yüklü değil.", ephemeral: true });
+  }
+  const mq = musicQueues.get(interaction.guildId);
+  if (!mq?.playing && interaction.customId !== "eb_m_stop") {
+    return interaction.reply({ content: "❌ Çalan şarkı yok.", ephemeral: true });
+  }
+
+  const member = interaction.member;
+  const voiceChannel = member?.voice?.channel;
+  if (!isAdmin(interaction) && (!voiceChannel || voiceChannel.id !== mq?.connection?.joinConfig?.channelId)) {
+    return interaction.reply({ content: "❌ Bot ile aynı ses kanalında olmalısın.", ephemeral: true });
+  }
+
+  const id = interaction.customId;
+  if (id === "eb_m_pause") {
+    mq.player.pause();
+    mq.paused = true;
+    return interaction.reply({ content: "⏸️ Duraklatıldı.", ephemeral: true });
+  }
+  if (id === "eb_m_resume") {
+    mq.player.unpause();
+    mq.paused = false;
+    return interaction.reply({ content: "▶️ Devam.", ephemeral: true });
+  }
+  if (id === "eb_m_skip") {
+    mq.player.stop(true);
+    return interaction.reply({ content: "⏭️ Geçildi.", ephemeral: true });
+  }
+  if (id === "eb_m_stop") {
+    mq.destroy();
+    return interaction.reply({ content: "⏹️ Durduruldu, kanaldan çıkıldı.", ephemeral: true });
+  }
+  if (id === "eb_m_loop") {
+    mq.loop = mq.loop === "off" ? "track" : mq.loop === "track" ? "queue" : "off";
+    const labels = { off: "Kapalı", track: "Parça", queue: "Kuyruk" };
+    return interaction.reply({ content: `🔁 Döngü: **${labels[mq.loop]}**`, ephemeral: true });
+  }
+  return false;
+}
+
+const MUSIC_COMMANDS = [
+  "çal", "durdur", "devam", "geç", "kuyruk", "çık",
+  "muzik-ses", "şimdi", "karıştır", "tekrar", "kuyruk-temizle"
+];
+
+// ======================================================
+// ÖNERİ SİSTEMİ + BOT DURUMU
+// ======================================================
+
+async function handleOneriCommand(interaction) {
+  const config = getServerConfig(interaction.guildId);
+  config.suggestions ??= { channelId: null, count: 0 };
+
+  if (interaction.commandName === "öneri-kanal") {
+    if (!hasPermission(interaction, PermissionsBitField.Flags.ManageGuild)) {
+      return interaction.reply({ content: "❌ **Sunucuyu Yönet** yetkisi gerekir.", ephemeral: true });
+    }
+    const ch = interaction.options.getChannel("kanal");
+    config.suggestions.channelId = ch.id;
+    saveServerConfig(interaction.guildId, config);
+    return interaction.reply({ content: `✅ Öneri kanalı ${ch} olarak ayarlandı.`, ephemeral: true });
+  }
+
+  if (interaction.commandName === "öneri") {
+    const text = interaction.options.getString("metin")?.trim();
+    if (!text || text.length < 5) {
+      return interaction.reply({ content: "❌ Öneri en az 5 karakter olmalı.", ephemeral: true });
+    }
+    const channelId = config.suggestions.channelId;
+    if (!channelId) {
+      return interaction.reply({
+        content: "❌ Öneri kanalı ayarlı değil. Yetkili `/öneri-kanal` ile ayarlasın.",
+        ephemeral: true
+      });
+    }
+    const channel = interaction.guild.channels.cache.get(channelId);
+    if (!channel?.isTextBased()) {
+      return interaction.reply({ content: "❌ Öneri kanalı bulunamadı.", ephemeral: true });
+    }
+
+    config.suggestions.count = (config.suggestions.count || 0) + 1;
+    const num = config.suggestions.count;
+    saveServerConfig(interaction.guildId, config);
+
+    const msg = await channel.send({
+      embeds: [
+        new EmbedBuilder()
+          .setTitle(`💡 Öneri #${num}`)
+          .setColor(0xfee75c)
+          .setDescription(text.slice(0, 2000))
+          .addFields({ name: "Gönderen", value: `${interaction.user} (\`${interaction.user.tag}\`)` })
+          .setFooter({ text: BRAND_FOOTER })
+          .setTimestamp()
+      ]
+    });
+    await msg.react("✅").catch(() => {});
+    await msg.react("❌").catch(() => {});
+
+    return interaction.reply({ content: `${EMOJI.ok} Önerin gönderildi: ${msg.url}`, ephemeral: true });
+  }
+
+  return false;
+}
+
+function startPresenceRotation() {
+  const states = [
+    () => ({ name: `${client.guilds.cache.size} sunucu • /yardım`, type: 3 }), // Watching
+    () => ({ name: "Endless Builder", type: 0 }), // Playing
+    () => {
+      let members = 0;
+      for (const g of client.guilds.cache.values()) members += g.memberCount || 0;
+      return { name: `${members.toLocaleString("tr-TR")} üye`, type: 3 };
+    },
+    () => ({ name: "müzik • /çal", type: 2 }), // Listening
+    () => ({ name: "/setup ile sunucu kur", type: 0 })
+  ];
+  let i = 0;
+  const tick = () => {
+    if (!client.user) return;
+    try {
+      const s = states[i % states.length]();
+      client.user.setPresence({
+        activities: [{ name: s.name, type: s.type }],
+        status: "online"
+      });
+      i++;
+    } catch {}
+  };
+  tick();
+  setInterval(tick, 2 * 60 * 1000).unref?.();
+}
+
+
+
+commands.push(
+  new SlashCommandBuilder()
+    .setName("çal")
+    .setDescription("Şarkı çal / kuyruğa ekle (YouTube adı veya URL)")
+    .setDMPermission(false)
+    .addStringOption(o => o.setName("sarki").setDescription("Şarkı adı veya YouTube linki").setRequired(true).setMaxLength(200)),
+  new SlashCommandBuilder().setName("durdur").setDescription("Müziği duraklat").setDMPermission(false),
+  new SlashCommandBuilder().setName("devam").setDescription("Müziği devam ettir").setDMPermission(false),
+  new SlashCommandBuilder().setName("geç").setDescription("Sıradaki şarkıya geç").setDMPermission(false),
+  new SlashCommandBuilder().setName("kuyruk").setDescription("Müzik kuyruğunu göster").setDMPermission(false),
+  new SlashCommandBuilder().setName("şimdi").setDescription("Şu an çalan şarkıyı göster").setDMPermission(false),
+  new SlashCommandBuilder().setName("çık").setDescription("Ses kanalından ayrıl ve kuyruğu temizle").setDMPermission(false),
+  new SlashCommandBuilder()
+    .setName("muzik-ses")
+    .setDescription("Müzik ses seviyesini ayarla")
+    .setDMPermission(false)
+    .addIntegerOption(o => o.setName("seviye").setDescription("1-150").setRequired(true).setMinValue(1).setMaxValue(150)),
+  new SlashCommandBuilder().setName("karıştır").setDescription("Kuyruğu karıştır").setDMPermission(false),
+  new SlashCommandBuilder()
+    .setName("tekrar")
+    .setDescription("Döngü modunu ayarla")
+    .setDMPermission(false)
+    .addStringOption(o =>
+      o.setName("mod").setDescription("Döngü").setRequired(true)
+        .addChoices(
+          { name: "Kapalı", value: "off" },
+          { name: "Parça tekrarı", value: "track" },
+          { name: "Kuyruk tekrarı", value: "queue" }
+        )
+    ),
+  new SlashCommandBuilder().setName("kuyruk-temizle").setDescription("Kuyruğu temizle (çalan kalsın)").setDMPermission(false),
+  new SlashCommandBuilder()
+    .setName("öneri")
+    .setDescription("Sunucuya öneri gönder")
+    .setDMPermission(false)
+    .addStringOption(o => o.setName("metin").setDescription("Önerin").setRequired(true).setMaxLength(1000)),
+  new SlashCommandBuilder()
+    .setName("öneri-kanal")
+    .setDescription("Öneri kanalını ayarla (yetkili)")
+    .setDMPermission(false)
+    .setDefaultMemberPermissions(PermissionsBitField.Flags.ManageGuild)
+    .addChannelOption(o => o.setName("kanal").setDescription("Öneri kanalı").addChannelTypes(ChannelType.GuildText).setRequired(true))
+);
+
+
+// Komut listesini Discord API formatına çevir, isim çakışmalarını temizle, 100 limitini koru
+function normalizeCommands(list) {
+  const byName = new Map();
+  for (const item of list) {
+    if (!item) continue;
+    let data;
+    try {
+      data = typeof item.toJSON === "function" ? item.toJSON() : item;
+    } catch (e) {
+      console.warn("⚠️ Komut serialize hatası:", e.message);
+      continue;
+    }
+    if (!data?.name) continue;
+    // Son eklenen aynı ismi ezer (güncel tanım kalsın)
+    byName.set(data.name, data);
+  }
+  let out = [...byName.values()];
+  if (out.length > 100) {
+    console.warn(`⚠️ ${out.length} komut var; Discord limiti 100. Fazlalık kesiliyor.`);
+    out = out.slice(0, 100);
+  }
+  return out;
+}
 
 // ======================================================
 // LOGIN
