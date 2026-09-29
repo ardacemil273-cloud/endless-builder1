@@ -5995,14 +5995,14 @@ const HELP_CATEGORIES = [
   { key: "mod", label: "Moderasyon", emoji: "🛡️", cmds: ["ban", "unban", "kick", "timeout", "mute", "unmute", "warn", "warnings", "warn-sil", "clear"] },
   { key: "roller", label: "Roller", emoji: "🎭", cmds: ["rol-panel", "streamer-panel", "kayit-panel", "kayit"] },
   { key: "level", label: "Level", emoji: "⭐", cmds: ["rank", "leaderboard", "level-sistem"] },
-  { key: "ekonomi", label: "Ekonomi", emoji: "💰", cmds: ["bakiye", "günlük", "haftalık", "öde", "çalış", "slots", "leaderboard-para", "mağaza", "satın-al", "mağaza-ekle", "mağaza-sil", "para-ver"] },
+  { key: "ekonomi", label: "Ekonomi", emoji: "💰", cmds: ["ekonomi", "mağaza", "satın-al", "mağaza-ekle", "mağaza-sil"] },
   { key: "cekilis", label: "Çekiliş", emoji: "🎁", cmds: ["cekilis", "cekilis-bitir"] },
   { key: "ai", label: "AI", emoji: "🤖", cmds: ["ai", "ai-kanal"] },
   { key: "guvenlik", label: "Güvenlik", emoji: "🔐", cmds: ["antiraid", "automod"] },
   { key: "ayarlar", label: "Ayarlar", emoji: "⚙️", cmds: ["ayarlar", "premium", "yardım"] },
   { key: "araclar", label: "Araçlar", emoji: "🧰", cmds: ["afk", "avatar", "kullanici", "sunucu", "snipe", "anket", "rastgele", "hesapla", "hatirlat", "emojiler", "ping", "say", "ozel-oda-kur"] },
   { key: "eglence", label: "Eğlence", emoji: "🎉", cmds: ["sarıl", "öp", "tokat", "okşa", "yumruk", "dans", "ship", "8ball", "zar", "yazıtura", "rate", "howgay", "aşkölçer"] },
-  { key: "muzik", label: "Müzik", emoji: "🎵", cmds: ["muzik"] }
+  { key: "muzik", label: "Müzik", emoji: "🎵", cmds: ["muzik", "ozel-oda-kur"] }
 ];
 
 function helpMenuRow(selected) {
@@ -7024,6 +7024,10 @@ async function handleExtraInteraction(interaction) {
 
   if (interaction.isChatInputCommand()) {
     const n = interaction.commandName;
+    if (typeof GROUPED_TOP_LEVEL !== "undefined" && GROUPED_TOP_LEVEL.includes(n)) {
+      await handleGroupedCommand(interaction);
+      return true;
+    }
     if (MOD_COMMANDS.includes(n)) { await handleModeration(interaction); return true; }
     if (n === "para-ver") { await handleParaVer(interaction); return true; }
     if (typeof UTILITY_COMMANDS !== "undefined" && UTILITY_COMMANDS.includes(n)) {
@@ -10620,6 +10624,10 @@ client.on("interactionCreate", async (interaction) => {
     // Eğlence + özel oda kur komutları
     if (interaction.isChatInputCommand()) {
       const n = interaction.commandName;
+      if (typeof GROUPED_TOP_LEVEL !== "undefined" && GROUPED_TOP_LEVEL.includes(n)) {
+        await handleGroupedCommand(interaction);
+        return;
+      }
       if (n === "özel-oda-kur" || n === "ozel-oda-kur") {
         await setupTempVoice(interaction);
         return;
@@ -11900,102 +11908,295 @@ commands.push(
 );
 
 
-// Komut listesini Discord API formatına çevir, isim çakışmalarını temizle, 100 limitini koru
-function normalizeCommands(list) {
+
+// ======================================================
+// KOMUT KAYIT SİSTEMİ (gruplu + güvenli)
+// ======================================================
+
+/** Discord'a gidecek nihai komut listesini üretir */
+function buildSlashPayload() {
   const byName = new Map();
-  for (const item of list) {
-    if (!item) continue;
+
+  const add = (item) => {
+    if (!item) return;
     let data;
     try {
       data = typeof item.toJSON === "function" ? item.toJSON() : item;
     } catch (e) {
       console.warn("⚠️ Komut serialize hatası:", e.message);
-      continue;
+      return;
     }
-    if (!data?.name) continue;
-    // Discord: sadece küçük harf, uzunluk 1-32
-    data.name = String(data.name).toLowerCase();
+    if (!data?.name) return;
+    data.name = String(data.name).toLowerCase().trim();
+    if (!data.name || data.name.length > 32) return;
     byName.set(data.name, data);
-  }
+  };
 
-  // Öncelikli komutlar asla kesilmesin
+  // 1) Dosyadaki tüm commands[]
+  for (const c of commands) add(c);
+
+  // 2) Gruplu ekstra komutlar (aynı isim varsa ezer — güncel tanım)
+  for (const c of GROUPED_COMMANDS) add(c);
+
+  // Öncelik sırası — kesilirse bile bunlar kalsın
   const priority = [
-    "setup", "yardım", "muzik", "ozel-oda-kur", "ticket-panel", "kayit", "bakiye",
-    "rank", "cekilis", "afk", "ping", "ayarlar", "automod", "antiraid"
+    "setup", "setup-degistir", "setup-durum", "yardim", "yardım",
+    "muzik", "ozel-oda-kur", "ekonomi", "eglence", "arac",
+    "ticket-panel", "kayit", "kayit-panel", "mod",
+    "rank", "cekilis", "ayarlar", "automod", "antiraid", "ping"
   ];
+
   const rest = [...byName.values()].filter(c => !priority.includes(c.name));
   const pri = priority.map(n => byName.get(n)).filter(Boolean);
   let out = [...pri, ...rest];
-  // Tekrar unique
+
   const seen = new Set();
   out = out.filter(c => {
     if (seen.has(c.name)) return false;
     seen.add(c.name);
     return true;
   });
+
   if (out.length > 100) {
-    console.warn(`⚠️ ${out.length} komut var; Discord limiti 100. Öncelikli olanlar korundu.`);
+    console.warn(`⚠️ ${out.length} komut → 100 limite kesildi (öncelikliler korundu)`);
     out = out.slice(0, 100);
   }
   return out;
 }
 
 async function registerCommandsEverywhere() {
-  const payload = normalizeCommands(commands);
-  console.log(`📋 Kayıt: ${payload.length} komut`);
-  console.log("📋 İsimler:", payload.map(c => c.name).sort().join(", "));
+  const payload = buildSlashPayload();
+  console.log(`📋 Kayıt paketi: ${payload.length} komut`);
+  console.log("📋 " + payload.map(c => c.name).sort().join(", "));
 
-  // 1) GUILD_ID varsa oraya
   const guildId = process.env.GUILD_ID;
-  let any = false;
+
+  // Tüm guild'lere anında yaz
+  const guilds = [...client.guilds.cache.values()];
   if (guildId) {
     try {
-      const guild = await client.guilds.fetch(guildId);
-      await client.application.commands.set(payload, guild.id);
-      console.log(`✅ ${payload.length} komut → test sunucu: ${guild.name}`);
-      any = true;
+      const g = await client.guilds.fetch(guildId);
+      if (!guilds.find(x => x.id === g.id)) guilds.unshift(g);
     } catch (e) {
-      console.error("GUILD_ID kayıt hatası:", e.message);
+      console.warn("GUILD_ID alınamadı:", e.message);
     }
   }
 
-  // 2) Botun bulunduğu TÜM sunuculara anında kaydet (slash hemen görünür)
-  for (const guild of client.guilds.cache.values()) {
-    if (guildId && guild.id === guildId) continue;
+  for (const guild of guilds) {
     try {
       await client.application.commands.set(payload, guild.id);
-      console.log(`✅ ${payload.length} komut → ${guild.name}`);
-      any = true;
+      console.log(`✅ ${payload.length} komut yüklendi → ${guild.name} (${guild.id})`);
     } catch (e) {
-      console.error(`❌ ${guild.name} kayıt hatası:`, e.message);
-      if (e.rawError) console.error(JSON.stringify(e.rawError).slice(0, 400));
+      console.error(`❌ Kayıt hatası [${guild.name}]:`, e.message);
+      if (e.rawError) console.error(JSON.stringify(e.rawError).slice(0, 500));
     }
   }
 
-  // 3) Global (yedek, yayılması 1 saate kadar sürebilir)
+  // Global yedek
   try {
     await client.application.commands.set(payload);
-    console.log(`✅ ${payload.length} komut global kayda alındı`);
+    console.log(`✅ Global kayıt: ${payload.length} komut`);
   } catch (e) {
     console.error("Global kayıt hatası:", e.message);
-    if (e.rawError) console.error(JSON.stringify(e.rawError).slice(0, 400));
+    if (e.rawError) console.error(JSON.stringify(e.rawError).slice(0, 500));
   }
 
-  if (!any && !client.guilds.cache.size) {
-    console.warn("⚠️ Bot henüz hiç sunucuda değil; davet ettikten sonra yeniden başlat.");
+  if (!guilds.length) {
+    console.warn("⚠️ Bot hiç sunucuda değil. Davet edip yeniden başlat.");
   }
 }
 
-
 client.on("guildCreate", async guild => {
   try {
-    const payload = normalizeCommands(commands);
+    const payload = buildSlashPayload();
     await client.application.commands.set(payload, guild.id);
-    console.log(`✅ Yeni sunucuya komutlar yüklendi: ${guild.name}`);
+    console.log(`✅ Yeni sunucu komutları: ${guild.name}`);
   } catch (e) {
-    console.error("guildCreate komut kayıt hatası:", e.message);
+    console.error("guildCreate kayıt hatası:", e.message);
   }
 });
+
+// ---- GRUPLU KOMUT TANIMLARI (garanti kayıt) ----
+const GROUPED_COMMANDS = [
+  // Müzik
+  new SlashCommandBuilder()
+    .setName("muzik")
+    .setDescription("Müzik sistemi")
+    .setDMPermission(false)
+    .addSubcommand(s => s.setName("cal").setDescription("Şarkı çal / kuyruğa ekle")
+      .addStringOption(o => o.setName("sarki").setDescription("Şarkı adı veya YouTube linki").setRequired(true).setMaxLength(200)))
+    .addSubcommand(s => s.setName("durdur").setDescription("Duraklat"))
+    .addSubcommand(s => s.setName("devam").setDescription("Devam et"))
+    .addSubcommand(s => s.setName("gec").setDescription("Sonraki şarkı"))
+    .addSubcommand(s => s.setName("kuyruk").setDescription("Kuyruğu göster"))
+    .addSubcommand(s => s.setName("simdi").setDescription("Çalan şarkı"))
+    .addSubcommand(s => s.setName("cik").setDescription("Kanaldan ayrıl"))
+    .addSubcommand(s => s.setName("ses").setDescription("Ses seviyesi")
+      .addIntegerOption(o => o.setName("seviye").setDescription("1-150").setRequired(true).setMinValue(1).setMaxValue(150)))
+    .addSubcommand(s => s.setName("karistir").setDescription("Kuyruğu karıştır"))
+    .addSubcommand(s => s.setName("tekrar").setDescription("Döngü")
+      .addStringOption(o => o.setName("mod").setDescription("Mod").setRequired(true)
+        .addChoices({ name: "Kapalı", value: "off" }, { name: "Parça", value: "track" }, { name: "Kuyruk", value: "queue" })))
+    .addSubcommand(s => s.setName("temizle").setDescription("Kuyruğu temizle")),
+
+  // Özel oda
+  new SlashCommandBuilder()
+    .setName("ozel-oda-kur")
+    .setDescription("Özel oda sistemini kur")
+    .setDMPermission(false)
+    .setDefaultMemberPermissions(PermissionsBitField.Flags.ManageGuild)
+    .addChannelOption(o => o.setName("metin").setDescription("Yönetim paneli metin kanalı").addChannelTypes(ChannelType.GuildText).setRequired(true))
+    .addChannelOption(o => o.setName("ses").setDescription("Giriş ses kanalı").addChannelTypes(ChannelType.GuildVoice).setRequired(true))
+    .addChannelOption(o => o.setName("kategori").setDescription("Odaların kategorisi (opsiyonel)").addChannelTypes(ChannelType.GuildCategory).setRequired(false)),
+
+  // Ekonomi grubu
+  new SlashCommandBuilder()
+    .setName("ekonomi")
+    .setDescription("Ekonomi komutları")
+    .setDMPermission(false)
+    .addSubcommand(s => s.setName("bakiye").setDescription("Bakiyeni göster")
+      .addUserOption(o => o.setName("kullanici").setDescription("Kullanıcı")))
+    .addSubcommand(s => s.setName("gunluk").setDescription("Günlük ödül"))
+    .addSubcommand(s => s.setName("haftalik").setDescription("Haftalık ödül"))
+    .addSubcommand(s => s.setName("calis").setDescription("Çalışarak coin kazan"))
+    .addSubcommand(s => s.setName("ode").setDescription("Birine coin gönder")
+      .addUserOption(o => o.setName("kullanici").setDescription("Alıcı").setRequired(true))
+      .addIntegerOption(o => o.setName("miktar").setDescription("Miktar").setRequired(true).setMinValue(1).setMaxValue(1000000)))
+    .addSubcommand(s => s.setName("slots").setDescription("Slot oyna")
+      .addIntegerOption(o => o.setName("bahis").setDescription("Bahis").setRequired(true).setMinValue(1).setMaxValue(1000000)))
+    .addSubcommand(s => s.setName("siralama").setDescription("En zengin 10"))
+    .addSubcommand(s => s.setName("para-ver").setDescription("Yönetici: coin ver")
+      .addUserOption(o => o.setName("kullanici").setDescription("Kullanıcı").setRequired(true))
+      .addIntegerOption(o => o.setName("miktar").setDescription("Miktar").setRequired(true).setMinValue(1))),
+
+  // Eğlence grubu
+  new SlashCommandBuilder()
+    .setName("eglence")
+    .setDescription("Eğlence komutları")
+    .setDMPermission(false)
+    .addSubcommand(s => s.setName("saril").setDescription("Sarıl").addUserOption(o => o.setName("kullanici").setDescription("Hedef")))
+    .addSubcommand(s => s.setName("op").setDescription("Öp").addUserOption(o => o.setName("kullanici").setDescription("Hedef")))
+    .addSubcommand(s => s.setName("tokat").setDescription("Tokat").addUserOption(o => o.setName("kullanici").setDescription("Hedef")))
+    .addSubcommand(s => s.setName("oksa").setDescription("Okşa").addUserOption(o => o.setName("kullanici").setDescription("Hedef")))
+    .addSubcommand(s => s.setName("yumruk").setDescription("Yumruk").addUserOption(o => o.setName("kullanici").setDescription("Hedef")))
+    .addSubcommand(s => s.setName("dans").setDescription("Dans").addUserOption(o => o.setName("kullanici").setDescription("Hedef")))
+    .addSubcommand(s => s.setName("ship").setDescription("Ship")
+      .addUserOption(o => o.setName("kisi1").setDescription("1"))
+      .addUserOption(o => o.setName("kisi2").setDescription("2").setRequired(true)))
+    .addSubcommand(s => s.setName("8ball").setDescription("8ball").addStringOption(o => o.setName("soru").setDescription("Soru").setRequired(true).setMaxLength(500)))
+    .addSubcommand(s => s.setName("zar").setDescription("Zar").addIntegerOption(o => o.setName("yuz").setDescription("Yüz").setMinValue(2).setMaxValue(100)))
+    .addSubcommand(s => s.setName("yazitura").setDescription("Yazı tura"))
+    .addSubcommand(s => s.setName("rate").setDescription("Puanla").addStringOption(o => o.setName("ne").setDescription("Ne").setRequired(true).setMaxLength(100)))
+    .addSubcommand(s => s.setName("howgay").setDescription("How gay").addUserOption(o => o.setName("kullanici").setDescription("Hedef")))
+    .addSubcommand(s => s.setName("askolcer").setDescription("Aşk ölçer")
+      .addUserOption(o => o.setName("kisi1").setDescription("1").setRequired(true))
+      .addUserOption(o => o.setName("kisi2").setDescription("2").setRequired(true))),
+
+  // Araçlar grubu
+  new SlashCommandBuilder()
+    .setName("arac")
+    .setDescription("Yardımcı araçlar")
+    .setDMPermission(false)
+    .addSubcommand(s => s.setName("afk").setDescription("AFK ol").addStringOption(o => o.setName("sebep").setDescription("Sebep").setMaxLength(200)))
+    .addSubcommand(s => s.setName("avatar").setDescription("Avatar").addUserOption(o => o.setName("kullanici").setDescription("Kullanıcı")))
+    .addSubcommand(s => s.setName("kullanici").setDescription("Kullanıcı bilgisi").addUserOption(o => o.setName("kullanici").setDescription("Kullanıcı")))
+    .addSubcommand(s => s.setName("sunucu").setDescription("Sunucu bilgisi"))
+    .addSubcommand(s => s.setName("snipe").setDescription("Son silinen mesaj"))
+    .addSubcommand(s => s.setName("anket").setDescription("Anket")
+      .addStringOption(o => o.setName("soru").setDescription("Soru").setRequired(true).setMaxLength(250))
+      .addStringOption(o => o.setName("secenek1").setDescription("1").setRequired(true).setMaxLength(80))
+      .addStringOption(o => o.setName("secenek2").setDescription("2").setRequired(true).setMaxLength(80))
+      .addStringOption(o => o.setName("secenek3").setDescription("3").setMaxLength(80))
+      .addStringOption(o => o.setName("secenek4").setDescription("4").setMaxLength(80))
+      .addStringOption(o => o.setName("secenek5").setDescription("5").setMaxLength(80)))
+    .addSubcommand(s => s.setName("rastgele").setDescription("Rastgele üye"))
+    .addSubcommand(s => s.setName("hesapla").setDescription("Hesap makinesi").addStringOption(o => o.setName("islem").setDescription("İşlem").setRequired(true).setMaxLength(80)))
+    .addSubcommand(s => s.setName("hatirlat").setDescription("Hatırlatıcı")
+      .addIntegerOption(o => o.setName("dakika").setDescription("Dakika").setRequired(true).setMinValue(1).setMaxValue(10080))
+      .addStringOption(o => o.setName("not").setDescription("Not").setMaxLength(200)))
+    .addSubcommand(s => s.setName("emojiler").setDescription("Sunucu emojileri"))
+    .addSubcommand(s => s.setName("ping").setDescription("Bot gecikmesi"))
+    .addSubcommand(s => s.setName("say").setDescription("Bot adına yaz").addStringOption(o => o.setName("mesaj").setDescription("Mesaj").setRequired(true).setMaxLength(2000))),
+
+  // Yardım (ASCII alias)
+  new SlashCommandBuilder()
+    .setName("yardim")
+    .setDescription("Komut yardım menüsü")
+    .setDMPermission(false),
+];
+
+
+
+async function handleGroupedCommand(interaction) {
+  const n = interaction.commandName;
+  const sub = interaction.options?.getSubcommand?.(false) || null;
+
+  // /yardim alias
+  if (n === "yardim" || n === "yardım") {
+    return interaction.reply(helpHome());
+  }
+
+  // /ekonomi
+  if (n === "ekonomi") {
+    // map sub -> fake commandName for existing handlers
+    const map = {
+      bakiye: "bakiye",
+      gunluk: "günlük",
+      haftalik: "haftalık",
+      calis: "çalış",
+      ode: "öde",
+      slots: "slots",
+      siralama: "leaderboard-para",
+      "para-ver": "para-ver"
+    };
+    const mapped = map[sub];
+    if (!mapped) return interaction.reply({ content: "❌ Bilinmeyen ekonomi komutu.", ephemeral: true });
+    if (mapped === "para-ver") return handleParaVer(interaction);
+    // Monkey-patch commandName for handler
+    Object.defineProperty(interaction, "commandName", { value: mapped, configurable: true });
+    return handleEconomyCommand(interaction);
+  }
+
+  // /eglence
+  if (n === "eglence") {
+    const map = {
+      saril: "sarıl", op: "öp", tokat: "tokat", oksa: "okşa", yumruk: "yumruk", dans: "dans",
+      ship: "ship", "8ball": "8ball", zar: "zar", yazitura: "yazıtura", rate: "rate",
+      howgay: "howgay", askolcer: "aşkölçer"
+    };
+    const mapped = map[sub];
+    if (!mapped) return interaction.reply({ content: "❌ Bilinmeyen eğlence komutu.", ephemeral: true });
+    Object.defineProperty(interaction, "commandName", { value: mapped, configurable: true });
+    return handleFunCommand(interaction);
+  }
+
+  // /arac
+  if (n === "arac") {
+    const map = {
+      afk: "afk", avatar: "avatar", kullanici: "kullanici", sunucu: "sunucu", snipe: "snipe",
+      anket: "anket", rastgele: "rastgele", hesapla: "hesapla", hatirlat: "hatirlat",
+      emojiler: "emojiler", ping: "ping", say: "say"
+    };
+    const mapped = map[sub];
+    if (!mapped) return interaction.reply({ content: "❌ Bilinmeyen araç komutu.", ephemeral: true });
+    Object.defineProperty(interaction, "commandName", { value: mapped, configurable: true });
+    return handleUtilityCommand(interaction);
+  }
+
+  // /muzik
+  if (n === "muzik") {
+    return handleMusicCommand(interaction);
+  }
+
+  // /ozel-oda-kur
+  if (n === "ozel-oda-kur" || n === "özel-oda-kur") {
+    return setupTempVoice(interaction);
+  }
+
+  return false;
+}
+
+const GROUPED_TOP_LEVEL = ["ekonomi", "eglence", "arac", "muzik", "ozel-oda-kur", "yardim"];
 
 // ======================================================
 // LOGIN
