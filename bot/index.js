@@ -23,7 +23,7 @@ const path = require("path");
 
 // All private/runtime settings live here. Fill credentials locally; do not share this file publicly.
 const APP_CONFIG = {
-  discordToken: "MTU1MDg0ODY3MjA3NjQwNjg3NA.GzRax5.Ng33QnqwpD1Mah0GknUnj8c8UFkuypog9fjF4w",       // Discord Developer Portal -> Bot -> Token
+  discordToken: "MTU1MDg0ODY3MjA3NjQwNjg3NA.GvZGTO._90d6iU8UaGenm1v3Cr1eEduS4b2Ip8nu3AG2o",       // Discord Developer Portal -> Bot -> Token
   aiApiKey: "",           // Optional: your provider API key
   aiProvider: "",         // openai, groq, openrouter, deepseek, together, fireworks, or custom
   aiApiUrl: "",           // Required for custom; OpenAI-compatible Chat Completions endpoint
