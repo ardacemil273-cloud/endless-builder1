@@ -23,18 +23,18 @@ const path = require("path");
 
 // All private/runtime settings live here. Fill credentials locally; do not share this file publicly.
 const APP_CONFIG = {
-  discordToken: "MTU1MDg0ODY3MjA3NjQwNjg3NA.GvZGTO._90d6iU8UaGenm1v3Cr1eEduS4b2Ip8nu3AG2o",       // Discord Developer Portal -> Bot -> Token
-  aiApiKey: "",           // Optional: your provider API key
-  aiProvider: "",         // openai, groq, openrouter, deepseek, together, fireworks, or custom
-  aiApiUrl: "",           // Required for custom; OpenAI-compatible Chat Completions endpoint
-  aiModel: "",            // Required for custom; otherwise uses the provider default
+  discordToken: process.env.DISCORD_TOKEN || "",
+  aiApiKey: process.env.AI_API_KEY || "",
+  aiProvider: process.env.AI_PROVIDER || "",
+  aiApiUrl: process.env.AI_API_URL || "",
+  aiModel: process.env.AI_MODEL || "",
   aiTimeoutMs: 25000,
   aiMaxTokens: 600,
   aiSiteUrl: "https://discord.com",
-  guildId: "",            // Optional: one server to prioritize during slash-command registration
-  enablePresence: false,   // Needs the privileged Presence intent in Discord Developer Portal
-  premiumSkuId: "",       // Optional premium features
-  premiumPaymentUrl: ""   // Optional HTTPS checkout/info URL
+  guildId: process.env.GUILD_ID || "",
+  enablePresence: false,
+  premiumSkuId: process.env.PREMIUM_SKU_ID || "",
+  premiumPaymentUrl: process.env.PREMIUM_PAYMENT_URL || ""
 };
 
 function getAIKey() { return String(APP_CONFIG.aiApiKey || "").trim(); }
