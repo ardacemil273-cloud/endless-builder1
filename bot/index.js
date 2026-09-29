@@ -21,23 +21,21 @@ const {
 const fs = require("fs");
 const path = require("path");
 
-// All private/runtime settings live here. Fill credentials locally; do not share this file publicly.
+// Non-secret runtime settings live here. Store tokens only in hosting environment variables/secrets.
 const APP_CONFIG = {
-  discordToken: process.env.DISCORD_TOKEN || "",
-  aiApiKey: process.env.AI_API_KEY || "",
-  aiProvider: process.env.AI_PROVIDER || "",
-  aiApiUrl: process.env.AI_API_URL || "",
-  aiModel: process.env.AI_MODEL || "",
+  aiProvider: "",         // openai, groq, openrouter, deepseek, together, fireworks, or custom
+  aiApiUrl: "",           // Required for custom; OpenAI-compatible Chat Completions endpoint
+  aiModel: "",            // Required for custom; otherwise uses the provider default
   aiTimeoutMs: 25000,
   aiMaxTokens: 600,
   aiSiteUrl: "https://discord.com",
-  guildId: process.env.GUILD_ID || "",
-  enablePresence: false,
-  premiumSkuId: process.env.PREMIUM_SKU_ID || "",
-  premiumPaymentUrl: process.env.PREMIUM_PAYMENT_URL || ""
+  guildId: "",            // Optional: one server to prioritize during slash-command registration
+  enablePresence: false,   // Needs the privileged Presence intent in Discord Developer Portal
+  premiumSkuId: "",       // Optional premium features
+  premiumPaymentUrl: ""   // Optional HTTPS checkout/info URL
 };
 
-function getAIKey() { return String(APP_CONFIG.aiApiKey || "").trim(); }
+function getAIKey() { return String(process.env.AI_API_KEY || "").trim(); }
 
 // ======================================================
 // CLIENT
@@ -6192,7 +6190,7 @@ async function handleAiCommand(interaction) {
   }
   const apiKeyExists = Boolean(getAIKey());
   if (!apiKeyExists) {
-    return deny(interaction, "❌ AI anahtarı yok. index.js başındaki `APP_CONFIG.aiApiKey` alanını doldur.");
+    return deny(interaction, "❌ AI anahtarı yok. Hosting Environment Variables/Secrets bölümüne `AI_API_KEY` ekle.");
   }
   const wait = aiCooldownLeft(`cmd:${interaction.guildId}:${interaction.user.id}`, 8000);
   if (wait) return deny(interaction, `⏳ ${Math.ceil(wait / 1000)} sn sonra tekrar sor.`);
@@ -6227,7 +6225,7 @@ async function handleAiCommand(interaction) {
   } catch (error) {
     console.error("AI ERROR:", error.message);
     let msg = "❌ AI şu an cevap veremiyor, biraz sonra tekrar dene.";
-    if (error.message === "NO_KEY") msg = "❌ AI anahtarı bulunamadı. index.js başındaki `APP_CONFIG.aiApiKey` alanını doldur.";
+    if (error.message === "NO_KEY") msg = "❌ AI_API_KEY bulunamadı. Hosting Environment Variables/Secrets ayarını kontrol et.";
     else if (error.message === "RATE_LIMIT") msg = "⏳ AI yoğun, lütfen biraz sonra tekrar dene.";
     else if (error.message === "INVALID_KEY") msg = `❌ AI anahtarı reddedildi. index.js içindeki APP_CONFIG.aiProvider ve aiApiUrl değerlerinin anahtarla eşleştiğini doğrula.${error.safeDetails ? `\n${error.safeDetails}` : ""}`;
     else if (error.message === "PROVIDER_ACCESS") msg = `❌ Sağlayıcı erişimi reddetti; hesap/plan/model erişimini kontrol et.${error.safeDetails ? `\n${error.safeDetails}` : ""}`;
@@ -6250,7 +6248,7 @@ async function runAiConnectivityTest() {
 
 function formatAiDiagnosticError(error) {
   const detail = error?.safeDetails ? `\nSağlayıcı detayı: ${String(error.safeDetails).slice(0, 180)}` : "";
-  if (error.message === "NO_KEY") return "API anahtarı bulunamadı. index.js başındaki APP_CONFIG.aiApiKey alanını doldur.";
+  if (error.message === "NO_KEY") return "AI_API_KEY bulunamadı; hosting Environment Variables/Secrets ayarını kontrol et.";
   if (error.message === "INVALID_KEY") return `Sunucu API anahtarını reddetti (HTTP 401). anahtar ile APP_CONFIG.aiProvider/aiApiUrl eşleşmesini kontrol et.${detail}`;
   if (error.message === "PROVIDER_ACCESS") return `Sağlayıcı erişimi reddetti (HTTP 403); hesap/plan/endpoint erişimini kontrol et.${detail}`;
   if (error.message === "RATE_LIMIT") return "Sağlayıcı rate limit uyguladı (HTTP 429); biraz bekleyip tekrar dene.";
@@ -15126,18 +15124,18 @@ async function handleImaSlash(interaction) {
 // LOGIN
 // ======================================================
 
-const discordToken = String(APP_CONFIG.discordToken || "").trim();
+const discordToken = String(process.env.DISCORD_TOKEN || "").trim();
 if (!discordToken) {
-  console.error("❌ index.js başındaki APP_CONFIG.discordToken alanı boş; Discord bot token'ını oraya ekle.");
+  console.error("❌ DISCORD_TOKEN eksik. Hosting panelindeki Environment Variables/Secrets bölümüne ekle; token'ı koda veya GitHub'a koyma.");
   process.exit(1);
 }
 client.login(discordToken).catch(err => {
-  console.error("❌ GİRİŞ HATASI:", err.message);
-  if (/disallowed intents/i.test(err.message)) {
+  const safeMessage = String(err?.message || "Bilinmeyen giriş hatası").replaceAll(discordToken, "[GİZLİ]");
+  console.error("❌ GİRİŞ HATASI:", safeMessage);
+  if (/disallowed intents/i.test(safeMessage)) {
     console.error("   ↳ Discord Developer Portal → Bot → 'Privileged Gateway Intents' altında SERVER MEMBERS INTENT ve MESSAGE CONTENT INTENT'i aç.");
-  } else if (/token/i.test(err.message)) {
-    console.error("   ↳ APP_CONFIG.discordToken yanlış veya sıfırlanmış olabilir.");
+  } else if (/token/i.test(safeMessage)) {
+    console.error("   ↳ DISCORD_TOKEN geçersiz veya iptal edilmiş olabilir. Yeni token oluşturup hosting secret'ını güncelle.");
   }
   process.exit(1);
 });
-  
