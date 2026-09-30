@@ -11302,7 +11302,19 @@ function tvCfg(config) {
   return config.tempVoice;
 }
 
+// Aynı sunucuda kurulum devam ederken ikinci komut hata vermesin;
+// ikinci etkileşim ilk kurulumun bitmesini bekleyip güncel sonucu gösterecek.
 const tempVoiceSetupLocks = new Set();
+const tempVoiceCreationLocks = new Set();
+const tempVoiceSetupResults = new Map();
+
+function guildIconUrl(guild, options = {}) {
+  try {
+    return guild?.iconURL?.({ extension: "png", size: 256, ...options }) || null;
+  } catch {
+    return null;
+  }
+}
 
 function isTempVoicePanelMessage(message) {
   if (!message || message.author?.id !== client.user?.id) return false;
@@ -11318,7 +11330,6 @@ async function findTempVoicePanelMessages(channel) {
 async function setupTempVoice(interaction) {
   const guildId = interaction.guildId;
   if (!canManageGuild(interaction)) return interaction.reply({ content: `${EMOJI.no} Bu komut için **Sunucuyu Yönet** yetkisi gerekir.`, ephemeral: true });
-  if (tempVoiceSetupLocks.has(guildId)) return interaction.reply({ content: "⏳ Özel oda paneli şu anda kuruluyor; ikinci kurulum engellendi.", ephemeral: true });
 
   const textCh = interaction.options.getChannel("metin");
   const voiceCh = interaction.options.getChannel("ses");
@@ -11328,6 +11339,22 @@ async function setupTempVoice(interaction) {
   if (selectedCategory && selectedCategory.type !== ChannelType.GuildCategory) return interaction.reply({ content: `${EMOJI.no} Kategori seçimi geçersiz.`, ephemeral: true });
   const me = interaction.guild.members.me;
   if (!me?.permissions.has(PermissionsBitField.Flags.ManageChannels)) return interaction.reply({ content: `${EMOJI.no} Botta **Kanalları Yönet** yetkisi yok.`, ephemeral: true });
+
+  // İlk işlem devam ediyorsa bu etkileşimi reddetmek yerine beklet.
+  // Böylece Discord'da "ikinci işlem engellendi" gibi yanıltıcı bir hata görünmez.
+  if (tempVoiceSetupLocks.has(guildId)) {
+    try {
+      await interaction.deferReply({ ephemeral: true });
+      while (tempVoiceSetupLocks.has(guildId)) {
+        await new Promise(resolve => setTimeout(resolve, 250));
+      }
+      const result = tempVoiceSetupResults.get(guildId);
+      return interaction.editReply(result?.message || `${EMOJI.ok} Özel oda sistemi güncellendi. Panel ayarları güncel.`);
+    } catch (error) {
+      console.error("TEMP VOICE WAIT ERROR:", error);
+      return interaction.editReply("❌ Özel oda kurulumu beklenirken bir hata oluştu. Lütfen tekrar dene.").catch(() => {});
+    }
+  }
 
   tempVoiceSetupLocks.add(guildId);
   let deferred = false;
@@ -11359,6 +11386,8 @@ async function setupTempVoice(interaction) {
     const panel = {
       embeds: [new EmbedBuilder()
         .setTitle(`${EMOJI.room} ${EMOJI.dot} Özel Oda Sistemi`)
+        .setAuthor({ name: `${interaction.guild.name} • Özel Oda Merkezi`, iconURL: guildIconUrl(interaction.guild) || undefined })
+        .setThumbnail(guildIconUrl(interaction.guild) || undefined)
         .setColor(0x5865f2)
         .setDescription(
           `${EMOJI.spark} **Nasıl çalışır?**\n\n` +
@@ -11368,7 +11397,13 @@ async function setupTempVoice(interaction) {
           `🔒 Odan sadece sen ve davet ettiklerin içindir.\n` +
           `🗑️ Odadan herkes çıkınca oda silinir.`
         )
-        .setFooter({ text: BRAND_FOOTER })],
+        .addFields(
+          { name: "🔊 Giriş Kanalı", value: `${voiceCh}`, inline: true },
+          { name: "📁 Oda Kategorisi", value: `${category}`, inline: true },
+          { name: "🛡️ Güvenlik", value: "Kilitli • Sahip kontrollü", inline: true }
+        )
+        .setFooter({ text: `${BRAND_FOOTER} • ${interaction.guild.name}` })
+        .setTimestamp()],
       components: [new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId("eb_tv_limit").setLabel("Limit Ayarla").setEmoji("👥").setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId("eb_tv_lock").setLabel("Kilitle / Aç").setEmoji("🔒").setStyle(ButtonStyle.Secondary),
@@ -11407,14 +11442,18 @@ async function setupTempVoice(interaction) {
     tv.panelMessageId = canonical.id;
     tv.panelChannelId = textCh.id;
     saveServerConfig(guildId, config);
-    return await interaction.editReply(`${EMOJI.ok} Özel oda sistemi hazır; **tek panel** güncellendi veya oluşturuldu.\n📢 Panel: ${textCh}\n🔊 Giriş: ${voiceCh}\n📁 Kategori: ${category}`);
+    const successMessage = `${EMOJI.ok} Özel oda sistemi hazır; **tek panel** güncellendi veya oluşturuldu.\n📢 Panel: ${textCh}\n🔊 Giriş: ${voiceCh}\n📁 Kategori: ${category}`;
+    tempVoiceSetupResults.set(guildId, { ok: true, message: successMessage });
+    return await interaction.editReply(successMessage);
   } catch (error) {
     console.error("TEMP VOICE SETUP ERROR:", error);
     const message = "❌ Özel oda sistemi kurulamadı. Botun kanal yönetme, mesaj gönderme ve mesaj geçmişini okuma izinlerini kontrol et.";
+    tempVoiceSetupResults.set(guildId, { ok: false, message });
     if (deferred) return interaction.editReply(message).catch(() => {});
     return interaction.reply({ content: message, ephemeral: true }).catch(() => {});
   } finally {
     tempVoiceSetupLocks.delete(guildId);
+    setTimeout(() => tempVoiceSetupResults.delete(guildId), 30_000).unref();
   }
 }
 
@@ -11431,6 +11470,12 @@ async function handleTempVoiceState(oldState, newState) {
 
     // Giriş kanalına girdi → oda oluştur
     if (newState.channelId === tv.joinChannelId && oldState.channelId !== tv.joinChannelId) {
+      // Discord kısa sürede birden fazla voiceStateUpdate gönderebilir.
+      // Oda kaydı yazılmadan gelen ikinci olayın ikinci oda açmasını önle.
+      const creationKey = `${guild.id}:${member.id}`;
+      if (tempVoiceCreationLocks.has(creationKey)) return;
+      tempVoiceCreationLocks.add(creationKey);
+      try {
       // Zaten odası var mı?
       const existing = Object.entries(tv.rooms).find(([, r]) => r.ownerId === member.id);
       if (existing) {
@@ -11463,6 +11508,9 @@ async function handleTempVoiceState(oldState, newState) {
 
       await member.voice.setChannel(room).catch(() => {});
       await sendLog(guild, `${EMOJI.room} ${member} özel oda oluşturdu: ${room}`);
+      } finally {
+        tempVoiceCreationLocks.delete(creationKey);
+      }
     }
 
     // Odadan çıktı / boşaldı mı kontrol
